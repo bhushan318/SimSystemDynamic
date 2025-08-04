@@ -230,9 +230,12 @@
 #     print("✓ AnyLogic-style syntax")
 
 
-from sim_SD import stock, flow, model, TimeUnit, print_progress
 from datetime import datetime, timedelta
 
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from Sim.sim_SD import stock, flow, model, TimeUnit, print_progress
 
 
 unit = 'day'
@@ -244,8 +247,7 @@ tank1 = stock(values=100.0, name="Tank_1", units="liters")
 tank2 = stock(values=0.0, name="Tank_2", units="liters")
 
 # Flow rate: 2% per time unit
-transfer = tank1 * 0.02
-transfer.name = "Transfer_Flow"
+transfer = flow(rate=tank1.values* 0.02, name="Transfer_Flow",units="liters/day")
 
 # Connect
 tank1.add_outflow(transfer)
@@ -262,3 +264,6 @@ sim_model.run(duration=10)
 print(f"  Final Tank1: {tank1.values:.3f} liters")
 print(f"  Final Tank2: {tank2.values:.3f} liters")
 print(f"  Automatic dt: {sim_model.dt:.6f} {unit}s")
+
+sim_model.print_summary()
+sim_model.plot()

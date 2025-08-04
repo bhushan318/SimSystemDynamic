@@ -5,10 +5,13 @@ Created on Sat Aug  2 22:32:09 2025
 @author: NagabhushanamTattaga
 """
 
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 import numpy as np
 import matplotlib.pyplot as plt
-from sim_SD import stock, flow, model
-
+from  Sim.sim_SD import  stock, flow, model
 
 # Create simulation model
 sim_model = model(
@@ -31,11 +34,10 @@ population = stock(
 )
 
 
-growth_rates = np.random.uniform(0.005, 0.005, (14, 12))  # 0.5% to 2.5% annual growth
+growth_rates = np.random.uniform(0.005, 0.025, (14, 12))  # 0.5% to 2.5% annual growth
 
-mortality_rates  = np.random.uniform(0.0025, 0.0025, (14, 12))  # 0.5% to 2.5% annual growth
+mortality_rates  = np.random.uniform(0.0025, 0.005, (14, 12))  # 0.5% to 2.5% annual growth
 
-    
     
 births = flow(rate=population.values*growth_rates, name="Births_Growth",units="thousands/year")
 deaths = flow(rate=population.values*mortality_rates, name="Deaths", units="thousands/year")
@@ -52,4 +54,11 @@ sim_model.add_flow(deaths)
 # Run for 10 time units
 sim_model.run(duration=10)
 
-print(sim_model.results)        
+
+sim_model.plot()
+
+sim_model.print_summary()
+
+# print_progress()
+# print_summary() 
+# plot()     
