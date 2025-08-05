@@ -4,7 +4,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 import numpy as np
 import matplotlib.pyplot as plt
-from  Sim.sim_SD import  stock, flow, model
+from  Sim.simulation import  stock, flow, model
 
 
 regions =  14

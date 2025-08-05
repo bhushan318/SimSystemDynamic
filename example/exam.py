@@ -235,7 +235,7 @@ from datetime import datetime, timedelta
 import sys
 import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from Sim.sim_SD import stock, flow, model, TimeUnit, print_progress
+from Sim.simulation import stock, flow, model, TimeUnit, print_progress
 
 
 unit = 'day'
