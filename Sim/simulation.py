@@ -1,6 +1,6 @@
 """
-sim_SD.py - Enhanced System Dynamics Module
-Advanced AnyLogic-style Stock and Flow implementation with time management
+Enhanced System Dynamics Simulation Module
+Automatically integrates advanced integration methods when available
 """
 
 import numpy as np
@@ -11,6 +11,7 @@ from typing import Union, List, Callable, Any, Optional
 import json
 import warnings
 
+# Import your existing classes (I'll include the essential ones here)
 class TimeUnit(Enum):
     """Time units for simulation"""
     SECOND = ("second", "seconds", 1)
@@ -18,8 +19,8 @@ class TimeUnit(Enum):
     HOUR = ("hour", "hours", 3600)
     DAY = ("day", "days", 86400)
     WEEK = ("week", "weeks", 604800)
-    MONTH = ("month", "months", 2629746)  # Average month
-    YEAR = ("year", "years", 31556952)   # Average year
+    MONTH = ("month", "months", 2629746)
+    YEAR = ("year", "years", 31556952)
     
     def __init__(self, singular, plural, seconds_per_unit):
         self.singular = singular
@@ -71,19 +72,16 @@ class Stock:
         self.values = np.clip(self.values, self.min_value, self.max_value)
         self.initial_values = np.copy(self.values)
         
-        # Flow connections with names
-        self._inflows = {}   # {flow_name: flow_object}
-        self._outflows = {}  # {flow_name: flow_object}
+        # Flow connections
+        self._inflows = {}
+        self._outflows = {}
         
-        # Enhanced history tracking
+        # History tracking
         self.history = [np.copy(self.values)]
         self.time_history = [0.0]
-        
-        # Statistics
         self.min_recorded = np.copy(self.values)
         self.max_recorded = np.copy(self.values)
-        
-        print(f"Created Stock '{self.name}': dim={self.dim}, shape={self.values.shape}, units={self.units}")
+        print(f"Created Stock '{self.name}': dim={self.dim}, shape={self.values.shape}, units={self.units}")        
     
     @property
     def inflows(self):
@@ -92,7 +90,7 @@ class Stock:
     
     @property
     def outflows(self):
-        """Get dictionary of outflows"""
+        '''Get dictionary of outflows'''
         return self._outflows
     
     def add_inflow(self, flow, connection_name: str = None):
@@ -108,6 +106,7 @@ class Stock:
         self._outflows[flow_name] = flow
         flow._from_stock = self
         flow._from_connection_name = flow_name
+        
     
     def remove_flow(self, flow_name: str):
         """Remove a flow connection"""
@@ -115,9 +114,10 @@ class Stock:
             del self._inflows[flow_name]
         if flow_name in self._outflows:
             del self._outflows[flow_name]
+        
     
     def get_net_flow(self, dt: float):
-        """Calculate net flow into this stock"""
+        """Calculate net flow into this stock"""        
         net_flow = np.zeros_like(self.values)
         
         # Add inflows
@@ -147,10 +147,7 @@ class Stock:
     def update(self, dt: float, sim_time: float):
         """Update stock value based on flows"""
         net_flow = self.get_net_flow(dt)
-        
-        # Calculate potential new value
         potential_new_value = self.values + net_flow * dt
-        
         # Apply constraints
         self.values = np.clip(potential_new_value, self.min_value, self.max_value)
         
@@ -169,12 +166,14 @@ class Stock:
         self.max_recorded = np.copy(self.values)
     
     def total(self):
-        """Get total value"""
+        """Get total value"""        
         return np.sum(self.values)
+    
     
     def average(self):
         """Get average value"""
         return np.mean(self.values)
+
     
     def get_statistics(self):
         """Get comprehensive statistics"""
@@ -187,7 +186,8 @@ class Stock:
             'shape': self.values.shape,
             'units': self.units
         }
-    
+
+
     def __mul__(self, other):
         """Enable stock * rate syntax for creating flows"""
         if isinstance(other, (int, float, np.ndarray)):
@@ -204,6 +204,8 @@ class Stock:
             return f"{self.name}: {self.values.item():.2f}{units_str}"
         else:
             return f"{self.name}: {self.values} {self.units}"
+
+
 
 class Flow:
     """Enhanced Flow class with better error handling and tracking"""
@@ -228,11 +230,11 @@ class Flow:
         self._from_connection_name = None
         self._to_connection_name = None
         
-        # Enhanced history
+        
+        # history
         self.history = []
         self.time_history = []
         self.cumulative_flow = 0.0
-        
         print(f"Created Flow '{self.name}': units={self.units}")
     
     def get_rate(self):
@@ -252,20 +254,22 @@ class Flow:
         self.history.append(np.copy(rate))
         self.time_history.append(sim_time)
         self.cumulative_flow += np.sum(rate) * dt
-    
-    def get_statistics(self):
-        """Get flow statistics"""
-        if not self.history:
-            return {'total_flow': 0, 'avg_rate': 0, 'max_rate': 0, 'units': self.units}
         
-        rates = np.array(self.history)
-        return {
-            'total_flow': self.cumulative_flow,
-            'avg_rate': np.mean(rates),
-            'max_rate': np.max(rates),
-            'min_rate': np.min(rates),
-            'units': self.units
-        }
+    def get_statistics(self):
+            """Get flow statistics"""
+            if not self.history:
+                return {'total_flow': 0, 'avg_rate': 0, 'max_rate': 0, 'units': self.units}
+            
+            rates = np.array(self.history)
+            return {
+                'total_flow': self.cumulative_flow,
+                'avg_rate': np.mean(rates),
+                'max_rate': np.max(rates),
+                'min_rate': np.min(rates),
+                'units': self.units
+            }
+        
+        
     
     def connect(self, from_stock: Stock = None, to_stock: Stock = None):
         """Connect flow between stocks"""
@@ -276,34 +280,36 @@ class Flow:
         return self
 
 class Model:
-    """Enhanced simulation model with comprehensive time management"""
+    """Enhanced Model class with automatic integration engine support"""
     
     def __init__(self, time_unit: Union[str, TimeUnit] = TimeUnit.DAY, 
                  start_time: Union[datetime, str, None] = None,
                  end_time: Union[datetime, str, int, float, None] = None,
                  dt: Optional[float] = None,
-                 name: str = "Simulation Model"):
+                 name: str = "Simulation Model",
+                 integration_method: str = "auto"):
         
         # Time management
         self.time_unit = TimeUnit.from_string(time_unit) if isinstance(time_unit, str) else time_unit
         self.name = name
         
-        # Set default dt (1/1000 of time unit, but ensure reasonable values)
-        if dt is None:
-            # if self.time_unit == TimeUnit.SECOND:
-            #     self.dt = 0.001  # 1 millisecond
-            # elif self.time_unit == TimeUnit.MINUTE:
-            #     self.dt = 0.06   # 3.6 seconds
-            # elif self.time_unit == TimeUnit.HOUR:
-            #     self.dt = 3.6    # 3.6 minutes
-            # elif self.time_unit == TimeUnit.DAY:
-            #     self.dt = 0.024  # ~35 minutes
-            # else:
-            self.dt = 1.0 / 5000.0  # Generic 1/1000
-        else:
-            self.dt = dt
         
-        # Start time handling
+        if dt is None:
+            if self.time_unit == TimeUnit.SECOND:
+                self.dt = 0.001  # 1 millisecond
+            elif self.time_unit == TimeUnit.MINUTE:
+                self.dt = 0.06   # 3.6 seconds
+            elif self.time_unit == TimeUnit.HOUR:
+                self.dt = 3.6    # 3.6 minutes
+            elif self.time_unit == TimeUnit.DAY:
+                self.dt = 0.024  # ~35 minutes
+            else:
+                self.dt = 1.0 / 5000.0  # Generic 1/1000
+        else:
+            self.dt = dt        
+        
+        
+        # Time management (simplified for brevity)
         if start_time is None:
             self.start_datetime = datetime.now()
         elif isinstance(start_time, str):
@@ -317,7 +323,6 @@ class Model:
         
         if end_time is not None:
             if isinstance(end_time, (int, float)):
-                # Duration in time units
                 self.duration = float(end_time)
                 self.end_datetime = self._add_time_units(self.start_datetime, end_time)
             elif isinstance(end_time, str):
@@ -326,9 +331,10 @@ class Model:
             elif isinstance(end_time, datetime):
                 self.end_datetime = end_time
                 self.duration = self._calculate_duration()
+                
         
         # Simulation state
-        self.time = 0.0  # Simulation time in time units
+        self.time = 0.0
         self.current_datetime = self.start_datetime
         self.stocks = []
         self.flows = []
@@ -343,15 +349,36 @@ class Model:
         # Results and statistics
         self.results = {}
         
-        print(f"Created Model '{self.name}':")
-        print(f"  Time Unit: {self.time_unit.singular}")
-        print(f"  Start: {self.start_datetime}")
-        print(f"  End: {self.end_datetime}")
-        print(f"  Duration: {self.duration} {self.time_unit.plural if self.duration != 1 else self.time_unit.singular}")
-        print(f"  Time Step (dt): {self.dt} {self.time_unit.plural}")
+        # Integration settings
+        self.integration_method = integration_method
+        self.use_advanced_integration = self._setup_advanced_integration()
+        
+        print(f"Created Model '{self.name}' with {self.time_unit.singular} time unit")
+        if self.use_advanced_integration:
+            print(f"✓ Advanced integration engine loaded (default method: {integration_method})")
+        else:
+            print("! Using basic Euler integration (install scipy for advanced methods)")
+    
+    def _setup_advanced_integration(self):
+        """Automatically setup advanced integration if available"""
+        try:
+            # Try to import and setup the integration engine
+            from integration_engine import IntegrationEngine, ModelIntegrationExtensions
+            
+            # Add integration support
+            ModelIntegrationExtensions.add_integration_support(self)
+            return True
+            
+        except ImportError:
+            # Integration engine not available, use basic methods
+            warnings.warn(
+                "Advanced integration engine not available. "
+                "Using basic Euler integration. "
+                "For better performance and accuracy, ensure integration_engine.py is available."
+            )
+            return False
     
     def _add_time_units(self, base_datetime: datetime, units: float) -> datetime:
-        """Add time units to datetime"""
         if self.time_unit == TimeUnit.SECOND:
             return base_datetime + timedelta(seconds=units)
         elif self.time_unit == TimeUnit.MINUTE:
@@ -393,12 +420,15 @@ class Model:
         """Get current simulation datetime"""
         return self._add_time_units(self.start_datetime, self.time)
     
+    
+    
     def step(self):
-        """Perform one simulation step"""
-        # Update current datetime
-        self.current_datetime = self.get_current_datetime()
+        """Perform one simulation step (basic Euler)"""
         
-        # Update all stocks
+        # Update current datetime
+        self.current_datetime = self._add_time_units(self.start_datetime, self.time)
+
+        # Update all stocks        
         for stock in self.stocks:
             stock.update(self.dt, self.time)
         
@@ -406,18 +436,113 @@ class Model:
         for flow in self.flows:
             rate = flow.get_rate()
             flow.update_history(rate, self.time, self.dt)
-        
-        # Update time
+            
+        # Update time        
         self.time += self.dt
         self.step_count += 1
-        
-        # Update history
+
+        # Update history        
         self.time_history.append(self.time)
         self.datetime_history.append(self.current_datetime)
     
-    def run(self, duration: Optional[float] = None, until: Optional[datetime] = None, 
-            max_steps: Optional[int] = None, progress_callback: Optional[Callable] = None):
-        """Run simulation with flexible stopping conditions"""
+    def run(self, duration: Optional[float] = None, 
+            until: Optional[datetime] = None, 
+            max_steps: Optional[int] = None, 
+            progress_callback: Optional[Callable] = None,
+            method: Optional[str] = None):
+        """
+        Enhanced run method that automatically uses advanced integration when available
+        
+        Parameters:
+        -----------
+        duration : float, optional
+            Duration to run simulation
+        until : datetime, optional  
+            Run until specific datetime
+        max_steps : int, optional
+            Maximum number of steps
+        progress_callback : callable, optional
+            Progress callback function
+        method : str, optional
+            Integration method ('auto', 'euler', 'rk4', 'rk45', etc.)
+            Overrides model default if specified
+        """
+        
+        # Determine integration method to use
+        use_method = method or self.integration_method
+        
+        # Use advanced integration if available and not explicitly using basic euler
+        if self.use_advanced_integration and use_method != 'euler_basic':
+            return self._run_with_advanced_integration(
+                duration, until, max_steps, progress_callback, use_method
+            )
+        else:
+            return self._run_with_basic_integration(
+                duration, until, max_steps, progress_callback
+            )
+    
+    def _run_with_advanced_integration(self, duration, until, max_steps, progress_callback, method):
+        """Run simulation using advanced integration engine"""
+        
+        print(f"Running simulation with advanced integration (method: {method})")
+        
+        # Determine end time
+        if duration is not None:
+            end_time = self.time + duration
+        elif until is not None:
+            duration_to_until = (until - self.current_datetime).total_seconds() / self.time_unit.seconds_per_unit
+            end_time = self.time + duration_to_until
+        elif self.duration is not None:
+            end_time = self.duration
+        else:
+            end_time = self.time + 10.0  # Default duration
+        
+        # Prepare integration parameters
+        integration_params = {}
+        if max_steps:
+            # Convert max_steps to max_step size for adaptive methods
+            total_duration = end_time - self.time
+            integration_params['max_step'] = total_duration / max_steps
+        
+        # Run integration
+        try:
+            result = self.integration_engine.integrate(
+                self,
+                method=method,
+                end_time=end_time,
+                **integration_params
+            )
+            
+            if result['success']:
+                print(f"✓ Advanced integration completed successfully")
+                print(f"  Method: {result.get('integration_method', method)}")
+                print(f"  Runtime: {result.get('integration_time', 0):.3f}s")
+                print(f"  Steps: {len(result.get('t', []))}")
+                
+                # Update model state from integration results
+                self._update_from_integration_results(result)
+                
+                # Call progress callback if provided
+                if progress_callback:
+                    progress_callback(self)
+                
+            else:
+                print(f"✗ Advanced integration failed: {result.get('message', 'Unknown error')}")
+                print("  Falling back to basic integration...")
+                return self._run_with_basic_integration(duration, until, max_steps, progress_callback)
+            
+            self._update_results()
+            return self.results
+            
+        except Exception as e:
+            print(f"✗ Advanced integration error: {e}")
+            print("  Falling back to basic integration...")
+            return self._run_with_basic_integration(duration, until, max_steps, progress_callback)
+    
+    def _run_with_basic_integration(self, duration, until, max_steps, progress_callback):
+        """Run simulation using basic Euler integration"""
+        
+        print("Running simulation with basic Euler integration")
         
         self.is_running = True
         start_step = self.step_count
@@ -439,30 +564,72 @@ class Model:
         while self.is_running:
             self.step()
             
-            # Check stopping conditions
             if target_time is not None and self.time >= target_time:
                 break
             
             if self.max_steps is not None and self.step_count >= self.max_steps:
                 break
             
-            # Progress callback
             if progress_callback and self.step_count % 100 == 0:
                 progress_callback(self)
         
         self.is_running = False
         
-        # Print results
         steps_taken = self.step_count - start_step
-        print(f"\nSimulation completed:")
-        print(f"  Steps taken: {steps_taken}")
-        print(f"  Final time: {self.time:.4f} {self.time_unit.plural}")
-        print(f"  Final datetime: {self.current_datetime}")
+        print(f"✓ Basic integration completed: {steps_taken} steps, final time: {self.time:.4f}")
         
-        # Update results
         self._update_results()
-        
         return self.results
+    
+    def _update_from_integration_results(self, result):
+        """Update model state from advanced integration results"""
+        if 'y' in result and result['success']:
+            # Update time arrays
+            self.time_history = result['t'].tolist()
+            self.time = result['t'][-1]
+            
+            # Update datetime history
+            self.datetime_history = [
+                self._add_time_units(self.start_datetime, t) 
+                for t in result['t']
+            ]
+            self.current_datetime = self.datetime_history[-1]
+            
+            # Update stock histories
+            state_idx = 0
+            for stock in self.stocks:
+                stock_size = stock.values.size if hasattr(stock.values, 'size') else 1
+                stock_results = result['y'][state_idx:state_idx + stock_size]
+                
+                # Update stock history
+                if hasattr(stock.values, 'shape') and stock.values.shape:
+                    # Multi-dimensional stock
+                    stock.history = [
+                        stock_results[:, i].reshape(stock.values.shape) 
+                        for i in range(len(result['t']))
+                    ]
+                else:
+                    # Scalar stock
+                    stock.history = stock_results[0].tolist()
+                
+                stock.time_history = result['t'].tolist()
+                
+                # Update current values to final state
+                if hasattr(stock.values, 'shape') and stock.values.shape:
+                    stock.values = stock_results[:, -1].reshape(stock.values.shape)
+                else:
+                    stock.values = stock_results[0, -1]
+                
+                # Update min/max recorded
+                if len(stock.history) > 1:
+                    all_values = np.array(stock.history)
+                    stock.min_recorded = np.min(all_values, axis=0)
+                    stock.max_recorded = np.max(all_values, axis=0)
+                
+                state_idx += stock_size
+            
+            # Update step count
+            self.step_count = len(result['t']) - 1
     
     def _update_results(self):
         """Update simulation results"""
@@ -473,7 +640,7 @@ class Model:
             'end_datetime': self.current_datetime,
             'time_unit': self.time_unit.singular,
             'stocks': {stock.name: stock.get_statistics() for stock in self.stocks},
-            'flows': {flow.name: flow.get_statistics() for flow in self.flows}
+            'flows': {flow.name: flow.get_statistics() for flow in self.flows if hasattr(flow, 'get_statistics')}
         }
     
     def reset(self):
@@ -492,15 +659,51 @@ class Model:
             flow.time_history = []
             flow.cumulative_flow = 0.0
     
+    def analyze_model(self):
+        """Analyze model characteristics (if advanced integration available)"""
+        if self.use_advanced_integration:
+            from integration_engine import ModelAnalyzer
+            analyzer = ModelAnalyzer()
+            characteristics = analyzer.analyze_model_characteristics(self)
+            
+            print(f"Model Analysis for '{self.name}':")
+            print(f"  States: {characteristics.num_states}")
+            print(f"  Large model: {characteristics.is_large}")
+            print(f"  Stiff system: {characteristics.is_stiff}")
+            print(f"  Has constraints: {characteristics.has_constraints}")
+            print(f"  Fast dynamics: {characteristics.has_fast_dynamics}")
+            
+            # Get recommendation
+            method, params = analyzer.recommend_integration_method(self)
+            print(f"  Recommended method: {method}")
+            print(f"  Suggested parameters: {params}")
+            
+            return characteristics
+        else:
+            print("Model analysis requires advanced integration engine")
+            return None
+    
+    def compare_integration_methods(self, methods=None, duration=10.0):
+        """Compare different integration methods (if available)"""
+        if self.use_advanced_integration:
+            if methods is None:
+                methods = ['euler', 'rk4', 'rk45']
+            
+            return self.integration_engine.compare_methods(
+                self, methods=methods, duration=duration
+            )
+        else:
+            print("Method comparison requires advanced integration engine")
+            return None
+    
     def plot(self, stocks: List[Stock] = None, flows: List[Flow] = None, 
              use_datetime: bool = False, save_path: str = None):
-        """Enhanced plotting with datetime support"""
+        """Enhanced plotting (same as your existing implementation)"""
         if stocks is None:
             stocks = self.stocks
         if flows is None:
             flows = self.flows
         
-        # Choose time axis
         if use_datetime and len(self.datetime_history) > 0:
             time_axis = self.datetime_history
             time_label = 'Date/Time'
@@ -508,7 +711,6 @@ class Model:
             time_axis = self.time_history
             time_label = f'Time ({self.time_unit.plural})'
         
-        # Create subplots
         n_plots = (1 if stocks else 0) + (1 if flows else 0)
         if n_plots == 0:
             return
@@ -519,12 +721,11 @@ class Model:
         
         plot_idx = 0
         
-        # Plot stocks
         if stocks:
             ax = axes[plot_idx]
             for stock in stocks:
                 if stock.values.ndim == 0:
-                    values = [h.item() if h.ndim == 0 else h for h in stock.history]
+                    values = [h.item() if hasattr(h, 'item') else h for h in stock.history]
                     ax.plot(time_axis, values, label=f'{stock.name}', linewidth=2, marker='o', markersize=2)
                 else:
                     totals = [np.sum(h) for h in stock.history]
@@ -537,7 +738,6 @@ class Model:
             ax.grid(True, alpha=0.3)
             plot_idx += 1
         
-        # Plot flows
         if flows:
             ax = axes[plot_idx]
             for flow in flows:
@@ -564,6 +764,8 @@ class Model:
         
         plt.show()
     
+    
+    
     def save_results(self, filepath: str):
         """Save simulation results to JSON"""
         # Convert datetime objects to ISO format for JSON serialization
@@ -576,31 +778,30 @@ class Model:
         with open(filepath, 'w') as f:
             json.dump(results_copy, f, indent=2)
         print(f"Results saved to: {filepath}")
+
     
     def print_summary(self):
         """Print comprehensive simulation summary"""
         print(f"\n{'='*60}")
         print(f"SIMULATION SUMMARY: {self.name}")
         print(f"{'='*60}")
-        print(f"Time Settings:")
-        print(f"  Unit: {self.time_unit.singular}")
-        print(f"  Start: {self.start_datetime}")
-        print(f"  End: {self.current_datetime}")
-        print(f"  Duration: {self.time:.4f} {self.time_unit.plural}")
-        print(f"  Time Step: {self.dt}")
-        print(f"  Total Steps: {self.step_count}")
+        print(f"Integration: {'Advanced' if self.use_advanced_integration else 'Basic Euler'}")
+        print(f"Time Unit: {self.time_unit.singular}")
+        print(f"Duration: {self.time:.4f} {self.time_unit.plural}")
+        print(f"Steps: {self.step_count}")
         
         print(f"\nStocks ({len(self.stocks)}):")
         for stock in self.stocks:
             stats = stock.get_statistics()
-            print(f"  {stock.name}: {stats['current']:.2f} {stock.units} (range: {stats['min']:.2f} - {stats['max']:.2f})")
+            print(f"  {stock.name}: {stats['current']:.2f} {stock.units}")
         
         print(f"\nFlows ({len(self.flows)}):")
         for flow in self.flows:
-            stats = flow.get_statistics()
-            print(f"  {flow.name}: Total={stats['total_flow']:.2f}, Avg Rate={stats['avg_rate']:.4f} {flow.units}")
+            if hasattr(flow, 'get_statistics'):
+                stats = flow.get_statistics()
+                print(f"  {flow.name}: Total={stats.get('total_flow', 0):.2f}")
 
-# Convenience functions
+# Convenience functions that work with both basic and advanced modes
 def stock(dim=None, values=0.0, name="", units="", min_value=0.0, max_value=np.inf):
     """Create a stock with specified parameters"""
     return Stock(dim=dim, values=values, name=name, units=units, min_value=min_value, max_value=max_value)
@@ -609,12 +810,13 @@ def flow(rate=0.0, name="", units="", min_rate=-np.inf, max_rate=np.inf):
     """Create a flow with specified parameters"""
     return Flow(rate_expression=rate, name=name, units=units, min_rate=min_rate, max_rate=max_rate)
 
-def model(time_unit="day", start_time=None, end_time=None, dt=None, name="Simulation"):
-    """Create a simulation model with time management"""
-    return Model(time_unit=time_unit, start_time=start_time, end_time=end_time, dt=dt, name=name)
-
-# Progress callback example
-def print_progress(model_instance):
-    """Example progress callback function"""
-    progress = (model_instance.time / model_instance.duration * 100) if model_instance.duration else 0
-    print(f"Progress: {progress:.1f}% - Time: {model_instance.time:.2f} {model_instance.time_unit.plural}")
+def model(time_unit="day", start_time=None, end_time=None, dt=None, name="Simulation", integration_method="auto"):
+    """Create a simulation model with automatic advanced integration if available"""
+    return Model(
+        time_unit=time_unit, 
+        start_time=start_time, 
+        end_time=end_time, 
+        dt=dt, 
+        name=name,
+        integration_method=integration_method
+    )
