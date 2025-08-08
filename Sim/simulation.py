@@ -68,13 +68,13 @@ class Stock:
         
         # Handle dimensions and initial values
         if dim is None:
-            self.values = np.array(values, dtype=float)
+            self.values = np.array(values, dtype=np.float64)
             self.dim = ()
         elif isinstance(dim, int):
             if isinstance(values, (int, float)):
                 self.values = np.full(dim, values, dtype=float)
             else:
-                self.values = np.array(values, dtype=float)
+                self.values = np.array(values, dtype=np.float64)
                 if self.values.shape[0] != dim:
                     raise ValueError(f"Values length {len(values)} doesn't match dimension {dim}")
             self.dim = (dim,)
@@ -82,7 +82,7 @@ class Stock:
             if isinstance(values, (int, float)):
                 self.values = np.full(dim, values, dtype=float)
             else:
-                self.values = np.array(values, dtype=float)
+                self.values = np.array(values, dtype=np.float64)
                 if self.values.shape != dim:
                     raise ValueError(f"Values shape {self.values.shape} doesn't match dimension {dim}")
             self.dim = dim
@@ -137,7 +137,7 @@ class Stock:
     
     def get_net_flow(self, dt: float):
         """Calculate net flow into this stock"""        
-        net_flow = np.zeros_like(self.values)
+        net_flow = np.zeros_like(self.values, dtype=np.float64)
         
         # Add inflows
         for flow in self._inflows.values():
