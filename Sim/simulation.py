@@ -7,9 +7,11 @@ import numpy as np
 import matplotlib.pyplot as plt
 from datetime import datetime, timedelta
 from enum import Enum
-from typing import Union, List, Callable, Any, Optional
 import json
 import warnings
+from typing import Union, List, Callable, Any, Optional, Tuple, Dict
+from enhanced_flow import MultiDimensionalFlow, FlowContext
+
 
 # Import your existing classes (I'll include the essential ones here)
 class TimeUnit(Enum):
@@ -39,11 +41,28 @@ class TimeUnit(Enum):
 class Stock:
     """Enhanced Stock class with better tracking and validation"""
     
-    def __init__(self, dim: Union[int, tuple] = None, values: Union[float, List, np.ndarray] = 0.0, 
-                 name: str = "", min_value: float = 0.0, max_value: float = np.inf, 
-                 units: str = ""):
+        
+    def __init__(self, dim: Union[int, tuple] = None, 
+                 values: Union[float, List, np.ndarray] = 0.0, 
+                 name: str = "", 
+                 min_value: float = 0.0, 
+                 max_value: float = np.inf, 
+                 units: str = "", 
+                 dimensions: Optional[List[str]] = None,
+                 dimension_labels: Optional[Dict[str, List[str]]] = None):
+            
+        
         self.name = name or f"Stock_{id(self)}"
         self.units = units
+        
+        # Multi-dimensional support
+        self.dimensions = dimensions or []  # Dimension names like ['age', 'region'] 
+        self.dimension_labels = dimension_labels or {}  # {'age': ['young', 'old'], 'region': ['north', 'south']}
+        self.md_flows = []  # List of (flow, target_stock) tuples for multi-dimensional flows
+        
+        # Enhanced statistics for multi-dimensional data
+        self.dimension_statistics = {}        
+        
         self.min_value = min_value
         self.max_value = max_value
         
@@ -141,8 +160,54 @@ class Stock:
                 net_flow -= flow_rate
             except Exception as e:
                 warnings.warn(f"Error in outflow calculation for {self.name}: {e}")
+
+        # Handle multi-dimensional flows
+        for flow_name, md_flow, target_stock in self.md_flows:
+            try:
+                context = FlowContext(
+                    time=getattr(self, '_current_time', 0.0),
+                    dt=dt,
+                    stock_dimensions={self.name: self.dimensions},
+                    stock_shapes={self.name: self.values.shape},
+                    current_values={self.name: self.values}
+                )
+                
+                # Apply multi-dimensional flow
+                if target_stock == self:
+                    # Self-flow (like aging within same stock)
+                    new_from, new_to, info = md_flow.apply(self.values, self.values, context)
+                    md_net_flow = new_to - self.values
+                else:
+                    # Flow to different stock - only calculate outflow
+                    new_from, new_to, info = md_flow.apply(self.values, target_stock.values, context)
+                    md_net_flow = new_from - self.values
+                
+                net_flow += md_net_flow
+                
+                if not info['success']:
+                    warnings.warn(f"MD Flow {md_flow.name} failed: {info['errors']}")
+                    
+            except Exception as e:
+                warnings.warn(f"Error calculating MD flow {md_flow.name}: {e}")
         
         return net_flow
+    
+        
+    def add_md_flow(self, flow: MultiDimensionalFlow, target_stock: 'Stock' = None, connection_name: str = None):
+        """Add multi-dimensional flow to this stock"""
+        flow_name = connection_name or f"md_flow_{len(self.md_flows)}"
+        self.md_flows.append((flow_name, flow, target_stock or self))
+        print(f"Added MD flow '{flow.name}' to stock '{self.name}'")
+    
+    def remove_md_flow(self, flow_name: str):
+        """Remove multi-dimensional flow by name"""
+        self.md_flows = [(name, flow, target) for name, flow, target in self.md_flows 
+                        if name != flow_name]
+    
+    def get_md_flows(self) -> List[Tuple[str, MultiDimensionalFlow, 'Stock']]:
+        """Get all multi-dimensional flows"""
+        return self.md_flows.copy()    
+        
     
     def update(self, dt: float, sim_time: float):
         """Update stock value based on flows"""
@@ -150,6 +215,15 @@ class Stock:
         potential_new_value = self.values + net_flow * dt
         # Apply constraints
         self.values = np.clip(potential_new_value, self.min_value, self.max_value)
+
+        # Store current time for MD flows
+        self._current_time = sim_time
+        
+        # Update dimension-specific statistics
+        if self.dimensions and self.values.ndim > 0:
+            self._update_dimension_statistics()        
+        
+        
         
         # Update history and statistics
         self.history.append(np.copy(self.values))
@@ -165,6 +239,27 @@ class Stock:
         self.min_recorded = np.copy(self.values)
         self.max_recorded = np.copy(self.values)
     
+    def _update_dimension_statistics(self):
+        """Update statistics for each dimension"""
+        try:
+            if len(self.dimensions) == 1:
+                # 1D case: statistics per dimension element
+                self.dimension_statistics = {
+                    f"{self.dimensions[0]}_{i}": float(self.values[i]) 
+                    for i in range(len(self.values))
+                }
+            elif len(self.dimensions) == 2:
+                # 2D case: statistics for each combination
+                for i in range(self.values.shape[0]):
+                    for j in range(self.values.shape[1]):
+                        key = f"{self.dimensions[0]}_{i}_{self.dimensions[1]}_{j}"
+                        self.dimension_statistics[key] = float(self.values[i, j])
+            # Add more dimensions as needed
+        except Exception:
+            pass  # Silently skip if dimension analysis fails    
+        
+    
+    
     def total(self):
         """Get total value"""        
         return np.sum(self.values)
@@ -174,18 +269,26 @@ class Stock:
         """Get average value"""
         return np.mean(self.values)
 
-    
+
     def get_statistics(self):
         """Get comprehensive statistics"""
-        return {
+        stats = {
             'current': self.total(),
             'initial': np.sum(self.initial_values),
             'min': np.sum(self.min_recorded),
             'max': np.sum(self.max_recorded),
             'final_time': self.time_history[-1] if self.time_history else 0,
             'shape': self.values.shape,
-            'units': self.units
+            'units': self.units,
+            
+            # NEW: Multi-dimensional fields
+            'dimensions': self.dimensions,
+            'dimension_labels': self.dimension_labels,
+            'dimension_statistics': self.dimension_statistics,
+            'md_flow_count': len(self.md_flows),
+            'is_multidimensional': len(self.dimensions) > 0
         }
+        return stats
 
 
     def __mul__(self, other):
@@ -204,6 +307,128 @@ class Stock:
             return f"{self.name}: {self.values.item():.2f}{units_str}"
         else:
             return f"{self.name}: {self.values} {self.units}"
+
+
+    def get_dimension_slice(self, dimension_name: str, dimension_value: Union[str, int]) -> np.ndarray:
+        """Get slice of stock for specific dimension value"""
+        if dimension_name not in self.dimensions:
+            raise ValueError(f"Dimension '{dimension_name}' not found in stock '{self.name}'")
+        
+        dim_index = self.dimensions.index(dimension_name)
+        
+        if isinstance(dimension_value, str) and dimension_name in self.dimension_labels:
+            value_index = self.dimension_labels[dimension_name].index(dimension_value)
+        else:
+            value_index = dimension_value
+        
+        # Create slice
+        indices = [slice(None)] * self.values.ndim
+        indices[dim_index] = value_index
+        
+        return self.values[tuple(indices)]
+    
+    def set_dimension_slice(self, dimension_name: str, dimension_value: Union[str, int], 
+                           values: np.ndarray):
+        """Set values for specific dimension slice"""
+        if dimension_name not in self.dimensions:
+            raise ValueError(f"Dimension '{dimension_name}' not found in stock '{self.name}'")
+        
+        dim_index = self.dimensions.index(dimension_name)
+        
+        if isinstance(dimension_value, str) and dimension_name in self.dimension_labels:
+            value_index = self.dimension_labels[dimension_name].index(dimension_value)
+        else:
+            value_index = dimension_value
+        
+        # Set slice
+        indices = [slice(None)] * self.values.ndim
+        indices[dim_index] = value_index
+        
+        self.values[tuple(indices)] = values
+    
+    def create_flow_context(self, dt: float, sim_time: float, 
+                           all_stocks: Dict[str, 'Stock'] = None) -> FlowContext:
+        """Create FlowContext for multi-dimensional flows"""
+        stock_dimensions = {self.name: self.dimensions}
+        stock_shapes = {self.name: self.values.shape}
+        current_values = {self.name: self.values}
+        
+        # Add other stocks if provided
+        if all_stocks:
+            for stock_name, stock in all_stocks.items():
+                stock_dimensions[stock_name] = stock.dimensions
+                stock_shapes[stock_name] = stock.values.shape
+                current_values[stock_name] = stock.values
+        
+        return FlowContext(
+            time=sim_time,
+            dt=dt,
+            stock_dimensions=stock_dimensions,
+            stock_shapes=stock_shapes,
+            current_values=current_values
+        )
+
+
+    def get_dimension_slice(self, dimension_name: str, dimension_value: Union[str, int]) -> np.ndarray:
+        """Get slice of stock for specific dimension value"""
+        if dimension_name not in self.dimensions:
+            raise ValueError(f"Dimension '{dimension_name}' not found in stock '{self.name}'")
+        
+        dim_index = self.dimensions.index(dimension_name)
+        
+        if isinstance(dimension_value, str) and dimension_name in self.dimension_labels:
+            value_index = self.dimension_labels[dimension_name].index(dimension_value)
+        else:
+            value_index = dimension_value
+        
+        # Create slice
+        indices = [slice(None)] * self.values.ndim
+        indices[dim_index] = value_index
+        
+        return self.values[tuple(indices)]
+    
+    def set_dimension_slice(self, dimension_name: str, dimension_value: Union[str, int], 
+                           values: np.ndarray):
+        """Set values for specific dimension slice"""
+        if dimension_name not in self.dimensions:
+            raise ValueError(f"Dimension '{dimension_name}' not found in stock '{self.name}'")
+        
+        dim_index = self.dimensions.index(dimension_name)
+        
+        if isinstance(dimension_value, str) and dimension_name in self.dimension_labels:
+            value_index = self.dimension_labels[dimension_name].index(dimension_value)
+        else:
+            value_index = dimension_value
+        
+        # Set slice
+        indices = [slice(None)] * self.values.ndim
+        indices[dim_index] = value_index
+        
+        self.values[tuple(indices)] = values
+    
+    def create_flow_context(self, dt: float, sim_time: float, 
+                           all_stocks: Dict[str, 'Stock'] = None) -> FlowContext:
+        """Create FlowContext for multi-dimensional flows"""
+        stock_dimensions = {self.name: self.dimensions}
+        stock_shapes = {self.name: self.values.shape}
+        current_values = {self.name: self.values}
+        
+        # Add other stocks if provided
+        if all_stocks:
+            for stock_name, stock in all_stocks.items():
+                stock_dimensions[stock_name] = stock.dimensions
+                stock_shapes[stock_name] = stock.values.shape
+                current_values[stock_name] = stock.values
+        
+        return FlowContext(
+            time=sim_time,
+            dt=dt,
+            stock_dimensions=stock_dimensions,
+            stock_shapes=stock_shapes,
+            current_values=current_values
+        )
+
+
 
 
 
@@ -408,7 +633,18 @@ class Model:
         """Add stock to model"""
         if stock not in self.stocks:
             self.stocks.append(stock)
+            
+            # NEW: Validate multi-dimensional setup
+            if stock.dimensions:
+                print(f"Added multi-dimensional stock '{stock.name}' with dimensions: {stock.dimensions}")
+                if stock.dimension_labels:
+                    for dim, labels in stock.dimension_labels.items():
+                        print(f"  {dim}: {labels}")
+        
         return stock
+    
+    
+    
     
     def add_flow(self, flow: Flow):
         """Add flow to model"""
@@ -739,6 +975,9 @@ class Model:
     }
     
     
+    
+    
+    
     def reset(self):
         """Reset simulation to initial state"""
         self.time = 0.0
@@ -791,6 +1030,40 @@ class Model:
         else:
             print("Method comparison requires advanced integration engine")
             return None
+
+    
+    def get_all_stocks_context(self, dt: float, sim_time: float) -> Dict[str, Any]:
+        """Get context information for all stocks"""
+        return {
+            stock.name: stock for stock in self.stocks
+        }
+    
+    def validate_multidimensional_model(self) -> Dict[str, Any]:
+        """Validate multi-dimensional model setup"""
+        validation = {
+            'valid': True,
+            'warnings': [],
+            'errors': [],
+            'multidimensional_stocks': 0,
+            'md_flows': 0
+        }
+        
+        for stock in self.stocks:
+            if stock.dimensions:
+                validation['multidimensional_stocks'] += 1
+                validation['md_flows'] += len(stock.md_flows)
+                
+                # Validate dimension setup
+                if stock.values.ndim != len(stock.dimensions):
+                    validation['errors'].append(
+                        f"Stock '{stock.name}' has {len(stock.dimensions)} dimensions "
+                        f"but array has {stock.values.ndim} dimensions"
+                    )
+                    validation['valid'] = False
+        
+        return validation
+
+
     
     def plot(self, stocks: List[Stock] = None, flows: List[Flow] = None, 
              use_datetime: bool = False, save_path: str = None):
