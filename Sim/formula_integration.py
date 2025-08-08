@@ -144,12 +144,19 @@ class EnhancedSystemDynamicsModel(Model):
         # Set rate formula
         if hasattr(flow, 'set_rate_formula'):
             flow.set_rate_formula(rate_formula, self.formula_engine)
+
         else:
             # Fallback: create rate expression manually
             def formula_rate_expression():
-                context = self._create_current_context()
+                # Try to get context from flow first, then create new one
+                if hasattr(flow, '_current_context') and flow._current_context:
+                    context = flow._current_context
+                else:
+                    context = self._create_current_context()
                 return self.formula_engine.evaluate(rate_formula, context, FormulaType.RATE)
+            
             flow.rate_expression = formula_rate_expression
+            flow._current_context = None  # Initialize context storage
         
         # Connect to stocks if specified
         if hasattr(flow, 'connect'):
@@ -224,6 +231,9 @@ class EnhancedSystemDynamicsModel(Model):
         for flow in self.flows:
             if hasattr(flow, 'set_context'):
                 flow.set_context(context)
+                # Also set context directly for flows with formulas
+            if hasattr(flow, '_current_context'):
+                flow._current_context = context
         
         # Call parent step method
         if hasattr(super(), 'step'):

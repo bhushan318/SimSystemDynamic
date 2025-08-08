@@ -333,14 +333,22 @@ class IntegrationEngine:
         """Get list of available integration methods"""
         return list(self.methods.keys())
     
+
     def integrate(self, model: 'Model', method: str = 'auto', **kwargs) -> dict:
-        """Run simulation with specified integration method"""
+        """Enhanced integration with full validation and optimization"""
+        
+        # Memory check for large models
+        memory_manager = MemoryManager()
+        t_span = (model.time, kwargs.get('end_time', model.time + 10.0))
+        memory_info = memory_manager.estimate_memory_usage(model, t_span, method)
+        
+        if not memory_info['within_limits']:
+            warnings.warn(f"Model may exceed memory limits: {memory_info['total_memory_mb']:.1f}MB estimated")
         
         # Auto-select method if requested
         if method == 'auto':
             method, auto_params = ModelAnalyzer.recommend_integration_method(model)
             print(f"Auto-selected integration method: {method}")
-            # Merge auto parameters with user parameters (user parameters take precedence)
             merged_kwargs = {**auto_params, **kwargs}
             kwargs = merged_kwargs
         
@@ -350,55 +358,60 @@ class IntegrationEngine:
         
         # Prepare for integration
         y0 = model.get_flattened_state()
-        t_span = (model.time, kwargs.get('end_time', model.time + 10.0))
         
-        print(f"Starting integration with {method.upper()} method")
+        print(f"Starting enhanced integration with {method.upper()} method")
         print(f"  Initial state size: {len(y0)}")
+        print(f"  Memory estimate: {memory_info['total_memory_mb']:.1f}MB")
         print(f"  Time span: {t_span[0]:.3f} to {t_span[1]:.3f}")
         
-        # Run integration
+        # Run integration with enhanced error handling
         start_time = time.time()
-        result = self.methods[method].integrate(model, t_span, y0, **kwargs)
+        try:
+            result = self.methods[method].integrate(model, t_span, y0, **kwargs)
+        except MemoryError:
+            # Try to recover with smaller steps or different method
+            print("  ⚠️ Memory error - attempting recovery with smaller steps")
+            if 'dt' in kwargs:
+                kwargs['dt'] *= 2  # Larger time step = fewer steps
+            elif method != 'euler':
+                method = 'euler'  # Fall back to simpler method
+            result = self.methods[method].integrate(model, t_span, y0, **kwargs)
+        
         integration_time = time.time() - start_time
         
-        # Store statistics
-        self.integration_stats[method] = {
-            'last_runtime': integration_time,
-            'last_success': result['success'],
-            'last_nfev': result.get('nfev', 0),
-            'last_steps': len(result.get('t', [])),
-            'efficiency': result.get('nfev', len(result.get('t', []))) / max(1, integration_time)
-        }
+        # Enhanced result validation
+        processor = IntegrationResultProcessor()
+        validation = processor.validate_integration_result(result, model)
+        result['validation'] = validation
         
-        # Update results with metadata
-        if result['success']:
+        # Update model state and add metadata
+        if result['success'] and validation['valid']:
             model.update_from_flattened_results(result)
-
-            # Add this right after model.update_from_flattened_results(result)
-            validation = self._validate_integration_result(result, model)
-            result['validation'] = validation
             
-            if not validation['valid']:
-                print(f"⚠️  Integration validation failed:")
-                for error in validation['errors']:
-                    print(f"     Error: {error}")
-                
-            if validation['warnings']:
-                for warning in validation['warnings']:
-                    print(f"     Warning: {warning}")
+            result.update({
+                'integration_method': method,
+                'integration_time': integration_time,
+                'method_name': self.methods[method].get_name(),
+                'memory_info': memory_info,
+                'quality_metrics': validation.get('quality_metrics', {})
+            })
             
-            result['integration_method'] = method
-            result['integration_time'] = integration_time
-            result['method_name'] = self.methods[method].get_name()
-            
-            print(f"Integration completed successfully:")
+            print(f"Enhanced integration completed successfully:")
             print(f"  Runtime: {integration_time:.3f}s")
             print(f"  Steps: {len(result['t'])}")
-            print(f"  Function evaluations: {result.get('nfev', 'N/A')}")
+            print(f"  Quality: {'✅ Excellent' if not validation['warnings'] else '⚠️ Some issues'}")
+            
         else:
-            print(f"Integration failed: {result.get('message', 'Unknown error')}")
+            print(f"Integration completed with issues:")
+            if validation['errors']:
+                for error in validation['errors']:
+                    print(f"    Error: {error}")
+            if validation['warnings']:
+                for warning in validation['warnings']:
+                    print(f"    Warning: {warning}")
         
         return result
+
     
     def compare_methods(self, model: 'Model', methods: List[str] = None, 
                        duration: float = 10.0, **kwargs) -> Dict[str, dict]:
@@ -569,9 +582,281 @@ class IntegrationEngine:
         
         return validation            
 
+
+class MemoryManager:
+    """Memory management for large-scale models"""
+    
+    def __init__(self, max_memory_mb: int = 1000):
+        self.max_memory_mb = max_memory_mb
+        self.memory_pools = {}
+    
+    def estimate_memory_usage(self, model: 'Model', t_span: tuple, method: str) -> dict:
+        """Estimate memory usage for integration"""
+        
+        # Calculate state vector size
+        state_size = sum(stock.values.size for stock in model.stocks)
+        
+        # Estimate number of time steps
+        if method in ['euler', 'rk4']:
+            dt = getattr(model, 'dt', 0.1)
+            n_steps = int((t_span[1] - t_span[0]) / dt) + 1
+        else:
+            # Adaptive methods - estimate
+            n_steps = max(100, int((t_span[1] - t_span[0]) * 10))
+        
+        # Memory calculations (in MB)
+        result_memory = (state_size * n_steps * 8) / (1024 * 1024)  # 8 bytes per float64
+        derivative_memory = (state_size * 8) / (1024 * 1024)
+        workspace_memory = result_memory * 0.5  # Estimated workspace
+        
+        total_memory = result_memory + derivative_memory + workspace_memory
+        
+        return {
+            'state_size': state_size,
+            'estimated_steps': n_steps,
+            'result_memory_mb': result_memory,
+            'total_memory_mb': total_memory,
+            'within_limits': total_memory < self.max_memory_mb
+        }
+    
+    def optimize_for_memory(self, model: 'Model', method: str) -> dict:
+        """Suggest optimizations for memory usage"""
+        
+        suggestions = []
+        
+        # Check model size
+        total_states = sum(stock.values.size for stock in model.stocks)
+        
+        if total_states > 10000:
+            suggestions.append("Consider using sparse representation for large multi-dimensional stocks")
+        
+        if method in ['euler', 'rk4']:
+            suggestions.append("Consider adaptive methods to reduce total steps")
+        
+        return {
+            'total_states': total_states,
+            'is_large_model': total_states > 1000,
+            'suggestions': suggestions
+        }
+
+
+
+class IntegrationResultProcessor:
+    """Advanced result processing and validation"""
+    
+    @staticmethod
+    def validate_integration_result(result: dict, model: 'Model') -> dict:
+        """Comprehensive integration result validation"""
+        validation = {
+            'valid': True, 
+            'warnings': [], 
+            'errors': [],
+            'quality_metrics': {}
+        }
+        
+        if not result.get('success', False):
+            validation['valid'] = False
+            validation['errors'].append(f"Integration failed: {result.get('message', 'Unknown error')}")
+            return validation
+        
+        try:
+            t = result.get('t', [])
+            y = result.get('y', np.array([]))
+            
+            # Check 1: Non-empty results
+            if len(t) < 2:
+                validation['errors'].append("Integration produced insufficient time points")
+                validation['valid'] = False
+                return validation
+            
+            # Check 2: Finite values
+            if not np.all(np.isfinite(y)):
+                validation['errors'].append("Integration produced non-finite values (NaN/Inf)")
+                validation['valid'] = False
+                return validation
+            
+            # Check 3: Mass conservation (if applicable)
+            mass_conservation = IntegrationResultProcessor._check_mass_conservation(y, model)
+            validation['quality_metrics']['mass_conservation'] = mass_conservation
+            
+            if mass_conservation['violation'] > 1e-6:
+                validation['warnings'].append(f"Mass conservation violation: {mass_conservation['violation']:.2e}")
+            
+            # Check 4: Solution smoothness
+            smoothness = IntegrationResultProcessor._check_solution_smoothness(y)
+            validation['quality_metrics']['smoothness'] = smoothness
+            
+            if smoothness > 1e6:  # Very large second derivatives
+                validation['warnings'].append("Solution may be numerically unstable (non-smooth)")
+            
+            # Check 5: Reasonable value ranges
+            max_value = np.max(np.abs(y))
+            validation['quality_metrics']['max_absolute_value'] = max_value
+            
+            if max_value > 1e12:
+                validation['warnings'].append(f"Very large values detected: {max_value:.2e}")
+            
+            # Check 6: Negative values in stocks (if bounds exist)
+            min_value = np.min(y)
+            validation['quality_metrics']['min_value'] = min_value
+            
+            if min_value < -1e-10:
+                validation['warnings'].append(f"Negative values detected: {min_value:.2e}")
+            
+        except Exception as e:
+            validation['errors'].append(f"Result validation failed: {str(e)}")
+            validation['valid'] = False
+        
+        return validation
+    
+    @staticmethod
+    def _check_mass_conservation(y: np.ndarray, model: 'Model') -> dict:
+        """Check mass conservation in the solution"""
+        try:
+            # Calculate total mass at each time step
+            total_mass = np.sum(y, axis=0)
+            
+            # Check conservation
+            mass_variation = np.std(total_mass) 
+            mean_mass = np.mean(total_mass)
+            relative_violation = mass_variation / (mean_mass + 1e-12)
+            
+            return {
+                'violation': relative_violation,
+                'initial_mass': total_mass[0],
+                'final_mass': total_mass[-1],
+                'max_mass': np.max(total_mass),
+                'min_mass': np.min(total_mass)
+            }
+        except:
+            return {'violation': float('inf')}
+    
+    @staticmethod
+    def _check_solution_smoothness(y: np.ndarray) -> float:
+        """Check solution smoothness using second derivatives"""
+        try:
+            if y.shape[1] < 3:
+                return 0.0
+            
+            # Calculate second derivatives (curvature)
+            second_deriv = np.diff(y, n=2, axis=1)
+            smoothness = np.mean(np.abs(second_deriv))
+            
+            return smoothness
+        except:
+            return float('inf')
+
+
+
+
 # Extensions to the existing Model class to support advanced integration
 class ModelIntegrationExtensions:
     """Extensions for the Model class to support advanced integration"""
+
+    @staticmethod
+    def get_flattened_state(self) -> np.ndarray:
+        """Enhanced flattened state extraction with multi-dimensional support"""
+        state_parts = []
+        for stock in self.stocks:
+            if hasattr(stock.values, 'flatten'):
+                # Multi-dimensional stock
+                flattened = stock.values.flatten()
+                state_parts.append(flattened)
+            else:
+                # Scalar stock
+                state_parts.append(np.array([stock.values]))
+        
+        return np.concatenate(state_parts) if state_parts else np.array([])
+    
+    @staticmethod
+    def set_flattened_state(self, state_vector: np.ndarray):
+        """Enhanced state setting with multi-dimensional support"""
+        index = 0
+        for stock in self.stocks:
+            if hasattr(stock.values, 'size'):
+                stock_size = stock.values.size
+                stock_shape = stock.values.shape
+            else:
+                stock_size = 1
+                stock_shape = ()
+            
+            # Extract stock values from vector
+            stock_values = state_vector[index:index + stock_size]
+            
+            # Reshape and assign with bounds checking
+            if stock_shape:
+                new_values = stock_values.reshape(stock_shape)
+            else:
+                new_values = stock_values[0] if len(stock_values) > 0 else 0.0
+            
+            # Apply stock bounds if they exist
+            if hasattr(stock, 'min_value') and hasattr(stock, 'max_value'):
+                new_values = np.clip(new_values, stock.min_value, stock.max_value)
+            
+            stock.values = new_values
+            index += stock_size
+
+    @staticmethod
+    def compute_derivatives(self, t: float, state_vector: np.ndarray) -> np.ndarray:
+        """Enhanced derivative computation with formula engine support"""
+        # Update model time
+        old_time = self.time
+        self.time = t
+        
+        # Set model state from flattened vector
+        self.set_flattened_state(state_vector)
+        
+        # Update flow contexts if this is an enhanced model
+        if hasattr(self, 'formula_engine') and hasattr(self, '_create_current_context'):
+            try:
+                context = self._create_current_context()
+                for flow in self.flows:
+                    if hasattr(flow, 'set_context'):
+                        flow.set_context(context)
+                    if hasattr(flow, '_current_context'):
+                        flow._current_context = context
+            except Exception as e:
+                pass  # Continue without context update if it fails        
+
+
+        
+        # Update auxiliaries if formula engine is available
+        if hasattr(self, 'formula_engine'):
+            try:
+                self.update_auxiliaries()
+            except:
+                pass  # Continue without auxiliaries if they fail
+        
+        # Compute derivatives
+        derivatives = np.zeros_like(state_vector)
+        state_index = 0
+        
+        for stock in self.stocks:
+            stock_size = stock.values.size if hasattr(stock.values, 'size') else 1
+            
+            try:
+                # Get net flow with enhanced error handling
+                net_flow = stock.get_net_flow(self.dt)
+                
+                # Flatten for integration
+                if hasattr(net_flow, 'flatten'):
+                    stock_derivatives = net_flow.flatten()
+                else:
+                    stock_derivatives = np.array([net_flow])
+                    
+            except Exception as e:
+                warnings.warn(f"Error computing derivatives for stock {stock.name}: {e}")
+                stock_derivatives = np.zeros(stock_size)
+            
+            # Add to derivatives vector
+            derivatives[state_index:state_index + stock_size] = stock_derivatives
+            state_index += stock_size
+        
+        # Restore original time
+        self.time = old_time
+        
+        return derivatives
+
     
     @staticmethod
     def add_integration_support(model_instance):

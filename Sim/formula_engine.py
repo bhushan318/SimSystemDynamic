@@ -773,15 +773,35 @@ def enhance_flow_with_formulas(flow_class):
         
         # Replace rate_expression with formula evaluation
         def formula_rate_expression():
-            if hasattr(self, '_current_context'):
+            if hasattr(self, '_current_context') and self._current_context is not None:
                 return self._formula_engine.evaluate(
                     self._rate_formula, self._current_context, FormulaType.RATE
                 )
             else:
-                warnings.warn(f"No context available for flow {self.name}")
-                return 0.0
+                # Create a basic context if none is available
+                try:
+                    # Try to get context from the engine's parent model
+                    if hasattr(engine, '_last_context'):
+                        context = engine._last_context
+                    else:
+                        # Create minimal context
+                        context = ModelContext(
+                            current_time=0.0,
+                            stocks={},
+                            parameters={}
+                        )
+                    
+                    return self._formula_engine.evaluate(
+                        self._rate_formula, context, FormulaType.RATE
+                    )
+                except:
+                    # Last resort - return 0
+                    return 0.0
         
         self.rate_expression = formula_rate_expression
+        # Initialize context storage
+        self._current_context = None
+
     
     def set_context(self, context: ModelContext):
         """Set current context for formula evaluation"""

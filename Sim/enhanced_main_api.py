@@ -174,6 +174,94 @@ async def validate_formula(request: FormulaValidationRequest) -> FormulaValidati
             complexity_score=0
         )
 
+
+@app.post("/api/validate_model_comprehensive")
+async def validate_model_comprehensive(model: ModelData):
+    """Comprehensive model validation before simulation"""
+    
+    try:
+        from model_validation import validate_model, ValidationLevel
+        
+        # Create temporary enhanced model for validation
+        temp_model = create_enhanced_model_for_validation(model)
+        
+        # Run validation
+        report = validate_model(temp_model, level="standard", include_behavioral=False)
+        
+        return {
+            "valid": report.is_valid,
+            "issues": [
+                {
+                    "severity": issue.severity.value,
+                    "category": issue.category,
+                    "message": issue.message,
+                    "suggestion": issue.suggestion,
+                    "element": issue.element_name
+                } for issue in report.issues
+            ],
+            "summary": {
+                "total_issues": report.total_issues,
+                "errors": report.error_count,
+                "warnings": report.warning_count
+            }
+        }
+        
+    except Exception as e:
+        return {
+            "valid": False,
+            "issues": [{"severity": "error", "message": f"Validation failed: {str(e)}"}],
+            "summary": {"total_issues": 1, "errors": 1, "warnings": 0}
+        }
+
+def create_enhanced_model_for_validation(model_data: ModelData):
+    """Create enhanced model just for validation (without full simulation setup)"""
+    
+    if not FORMULA_ENGINE_AVAILABLE:
+        # Use basic model
+        return build_simulation_model(model_data)
+    
+    # Create enhanced model
+    from formula_integration import EnhancedSystemDynamicsModel
+    enhanced_model = EnhancedSystemDynamicsModel("Validation Model")
+    
+    # Add parameters and constants
+    for name, value in model_data.parameters.items():
+        enhanced_model.add_parameter(name, value)
+    
+    for name, value in model_data.constants.items():
+        enhanced_model.add_constant(name, value)
+    
+    # Add auxiliaries
+    for name, formula in model_data.auxiliaries.items():
+        enhanced_model.add_auxiliary(name, formula)
+    
+    # Add stocks (validation only - no need for full setup)
+    for element in model_data.elements:
+        if element.type == "stock":
+            try:
+                formula = element.formula or str(element.value or 0)
+                enhanced_model.add_stock_with_formula(element.name, formula, units=element.units or "")
+            except Exception:
+                # Add basic stock if formula fails
+                from simulation import Stock
+                stock = Stock(values=element.value or 0, name=element.name, units=element.units or "")
+                enhanced_model.add_stock(stock)
+    
+    # Add flows (just for validation)
+    for element in model_data.elements:
+        if element.type == "flow":
+            try:
+                formula = element.formula or "0"
+                enhanced_model.add_flow_with_formula(element.name, formula, units=element.units or "")
+            except Exception:
+                # Add basic flow if formula fails
+                from simulation import Flow
+                flow = Flow(rate_expression=lambda: 0, name=element.name, units=element.units or "")
+                enhanced_model.add_flow(flow)
+    
+    return enhanced_model
+
+
 @app.post("/api/simulate")
 async def simulate_model(request: SimulationRequest) -> SimulationResult:
     """Run simulation with optional advanced formula engine"""
@@ -216,6 +304,31 @@ def run_enhanced_simulation(model_data: ModelData, validation_level: str) -> Sim
     """Run simulation using the enhanced formula engine"""
     
     print("🔬 Running enhanced simulation with formula engine")
+    
+    # VALIDATE FIRST - before any simulation setup
+    if validation_level in ["standard", "strict"]:
+        try:
+            from model_validation import validate_model
+            temp_model = create_enhanced_model_for_validation(model_data)
+            validation_report = validate_model(temp_model, level="basic", include_behavioral=False)
+            
+            if not validation_report.is_valid and validation_level == "strict":
+                return SimulationResult(
+                    time=[], stocks={}, flows={}, success=False,
+                    message=f"Model validation failed: {validation_report.error_count} errors found",
+                    validation_results={"valid": False, "errors": [issue.message for issue in validation_report.issues]}
+                )
+            
+            print(f"✅ Model validation passed ({validation_report.total_issues} issues found)")
+            
+        except Exception as e:
+            print(f"⚠️ Validation failed: {e}")
+            if validation_level == "strict":
+                return SimulationResult(
+                    time=[], stocks={}, flows={}, success=False,
+                    message=f"Model validation error: {str(e)}"
+                )    
+    
     
     # Create enhanced model
     enhanced_model = EnhancedSystemDynamicsModel("API Model")

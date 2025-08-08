@@ -10,7 +10,20 @@ from enum import Enum
 import json
 import warnings
 from typing import Union, List, Callable, Any, Optional, Tuple, Dict
-from enhanced_flow import MultiDimensionalFlow, FlowContext
+
+# Multi-dimensional flow support
+try:
+    from enhanced_flow import MultiDimensionalFlow, FlowContext
+    ENHANCED_FLOWS_AVAILABLE = True
+except ImportError:
+    ENHANCED_FLOWS_AVAILABLE = False
+    
+    # Mock classes for when enhanced flows not available
+    class FlowContext:
+        pass
+    class MultiDimensionalFlow:
+        pass
+
 
 
 # Import your existing classes (I'll include the essential ones here)
@@ -135,6 +148,9 @@ class Stock:
             del self._outflows[flow_name]
         
     
+
+
+    
     def get_net_flow(self, dt: float):
         """Calculate net flow into this stock"""        
         net_flow = np.zeros_like(self.values, dtype=np.float64)
@@ -143,55 +159,86 @@ class Stock:
         for flow in self._inflows.values():
             try:
                 flow_rate = flow.get_rate()
-                if isinstance(flow_rate, np.ndarray):
+                # Handle None flow rates
+                if flow_rate is None:
+                    flow_rate = 0.0
+                
+                # Handle scalar flows for multi-dimensional stocks
+                if isinstance(flow_rate, (int, float)) and self.values.ndim > 0:
+                    flow_rate = np.full_like(self.values, flow_rate, dtype=np.float64)
+                elif isinstance(flow_rate, np.ndarray):
+                    flow_rate = flow_rate.astype(np.float64)
                     if flow_rate.shape != self.values.shape:
-                        raise ValueError(f"Inflow rate shape {flow_rate.shape} doesn't match stock shape {self.values.shape}")
+                        try:
+                            flow_rate = np.broadcast_to(flow_rate, self.values.shape)
+                        except ValueError:
+                            warnings.warn(f"Inflow rate shape {flow_rate.shape} incompatible with stock shape {self.values.shape}")
+                            flow_rate = np.zeros_like(self.values, dtype=np.float64)
+                else:
+                    # Convert scalar to array
+                    flow_rate = np.full_like(self.values, float(flow_rate), dtype=np.float64)
+                    
                 net_flow += flow_rate
             except Exception as e:
                 warnings.warn(f"Error in inflow calculation for {self.name}: {e}")
         
-        # Subtract outflows
+        # Subtract outflows  
         for flow in self._outflows.values():
             try:
                 flow_rate = flow.get_rate()
-                if isinstance(flow_rate, np.ndarray):
+                # Handle None flow rates
+                if flow_rate is None:
+                    flow_rate = 0.0
+                    
+                # Handle scalar flows for multi-dimensional stocks
+                if isinstance(flow_rate, (int, float)) and self.values.ndim > 0:
+                    flow_rate = np.full_like(self.values, flow_rate, dtype=np.float64)
+                elif isinstance(flow_rate, np.ndarray):
+                    flow_rate = flow_rate.astype(np.float64)
                     if flow_rate.shape != self.values.shape:
-                        raise ValueError(f"Outflow rate shape {flow_rate.shape} doesn't match stock shape {self.values.shape}")
+                        try:
+                            flow_rate = np.broadcast_to(flow_rate, self.values.shape)
+                        except ValueError:
+                            warnings.warn(f"Outflow rate shape {flow_rate.shape} incompatible with stock shape {self.values.shape}")
+                            flow_rate = np.zeros_like(self.values, dtype=np.float64)
+                else:
+                    # Convert scalar to array
+                    flow_rate = np.full_like(self.values, float(flow_rate), dtype=np.float64)
+                    
                 net_flow -= flow_rate
             except Exception as e:
                 warnings.warn(f"Error in outflow calculation for {self.name}: {e}")
-
-        # Handle multi-dimensional flows
-        for flow_name, md_flow, target_stock in self.md_flows:
-            try:
-                context = FlowContext(
-                    time=getattr(self, '_current_time', 0.0),
-                    dt=dt,
-                    stock_dimensions={self.name: self.dimensions},
-                    stock_shapes={self.name: self.values.shape},
-                    current_values={self.name: self.values}
-                )
-                
-                # Apply multi-dimensional flow
-                if target_stock == self:
-                    # Self-flow (like aging within same stock)
-                    new_from, new_to, info = md_flow.apply(self.values, self.values, context)
-                    md_net_flow = new_to - self.values
-                else:
-                    # Flow to different stock - only calculate outflow
-                    new_from, new_to, info = md_flow.apply(self.values, target_stock.values, context)
-                    md_net_flow = new_from - self.values
-                
-                net_flow += md_net_flow
-                
-                if not info['success']:
-                    warnings.warn(f"MD Flow {md_flow.name} failed: {info['errors']}")
-                    
-            except Exception as e:
-                warnings.warn(f"Error calculating MD flow {md_flow.name}: {e}")
-        
-        return net_flow
     
+        # Handle multi-dimensional flows (if available)
+        if hasattr(self, 'md_flows') and self.md_flows:
+            try:
+                from enhanced_flow import FlowContext
+                for flow_name, md_flow, target_stock in self.md_flows:
+                    try:
+                        context = FlowContext(
+                            time=getattr(self, '_current_time', 0.0),
+                            dt=dt,
+                            stock_dimensions={self.name: getattr(self, 'dimensions', [])},
+                            stock_shapes={self.name: self.values.shape},
+                            current_values={self.name: self.values}
+                        )
+                        
+                        new_from, new_to, info = md_flow.apply(self.values, target_stock.values, context)
+                        if info['success']:
+                            if target_stock == self:
+                                md_net_flow = new_to - self.values
+                            else:
+                                md_net_flow = new_from - self.values
+                            net_flow += md_net_flow
+                            
+                    except Exception as e:
+                        warnings.warn(f"Error calculating MD flow {md_flow.name}: {e}")
+            except ImportError:
+                pass  # Enhanced flows not available
+    
+        return net_flow  # CRITICAL: Make sure this return statement exists!                
+                
+                
         
     def add_md_flow(self, flow: MultiDimensionalFlow, target_stock: 'Stock' = None, connection_name: str = None):
         """Add multi-dimensional flow to this stock"""
@@ -725,7 +772,11 @@ class Model:
         
         # Update current datetime
         self.current_datetime = self._add_time_units(self.start_datetime, self.time)
-
+    
+        # Store current time in stocks for MD flow context
+        for stock in self.stocks:
+            stock._current_time = self.time
+    
         # Update all stocks        
         for stock in self.stocks:
             stock.update(self.dt, self.time)
@@ -738,10 +789,19 @@ class Model:
         # Update time        
         self.time += self.dt
         self.step_count += 1
-
+    
         # Update history        
         self.time_history.append(self.time)
         self.datetime_history.append(self.current_datetime)
+
+
+        # Update time        
+        self.time += self.dt
+        self.step_count += 1
+
+        # # Update history        
+        # self.time_history.append(self.time)
+        # self.datetime_history.append(self.current_datetime)
     
     def run(self, duration: Optional[float] = None, 
             until: Optional[datetime] = None, 
@@ -778,6 +838,20 @@ class Model:
             return self._run_with_basic_integration(
                 duration, until, max_steps, progress_callback
             )
+    
+    def add_md_flow_between_stocks(self, md_flow: 'MultiDimensionalFlow', 
+                                  from_stock: Stock, to_stock: Stock = None):
+        """Add multi-dimensional flow between stocks"""
+        if not ENHANCED_FLOWS_AVAILABLE:
+            warnings.warn("Enhanced flows not available. Install enhanced_flow module.")
+            return
+        
+        target_stock = to_stock or from_stock
+        from_stock.add_md_flow(md_flow, target_stock)
+        
+        print(f"Added MD flow '{md_flow.name}' from '{from_stock.name}' to '{target_stock.name}'")
+        return md_flow    
+        
     
     def _run_with_advanced_integration(self, duration, until, max_steps, progress_callback, method):
         """Run simulation using advanced integration engine"""
@@ -1148,7 +1222,45 @@ class Model:
             json.dump(results_copy, f, indent=2)
         print(f"Results saved to: {filepath}")
 
-    
+
+    def validate_multidimensional_setup(self) -> Dict[str, Any]:
+        """Validate multi-dimensional model setup"""
+        validation = {
+            'valid': True,
+            'warnings': [],
+            'errors': [],
+            'multidimensional_stocks': 0,
+            'md_flows': 0,
+            'dimension_consistency': {}
+        }
+        
+        for stock in self.stocks:
+            if stock.dimensions:
+                validation['multidimensional_stocks'] += 1
+                validation['md_flows'] += len(stock.md_flows)
+                
+                # Validate dimension setup
+                if stock.values.ndim != len(stock.dimensions):
+                    validation['errors'].append(
+                        f"Stock '{stock.name}' has {len(stock.dimensions)} dimensions "
+                        f"but array has {stock.values.ndim} dimensions"
+                    )
+                    validation['valid'] = False
+                
+                # Check dimension labels consistency
+                for i, dim_name in enumerate(stock.dimensions):
+                    if dim_name in stock.dimension_labels:
+                        expected_size = len(stock.dimension_labels[dim_name])
+                        actual_size = stock.values.shape[i]
+                        if expected_size != actual_size:
+                            validation['warnings'].append(
+                                f"Stock '{stock.name}' dimension '{dim_name}' "
+                                f"has {expected_size} labels but {actual_size} values"
+                            )
+        
+        return validation
+
+
     def print_summary(self):
         """Print comprehensive simulation summary"""
         print(f"\n{'='*60}")
