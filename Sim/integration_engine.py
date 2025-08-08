@@ -59,12 +59,15 @@ class EulerMethod(IntegrationMethod):
                 # Apply bounds if needed
                 y[i] = model.apply_bounds(y[i])
                 
+            # Replace existing exception handling with:
             except Exception as e:
+                error_context = f"at t={t:.6f}, step {i}/{len(t_eval)}, dt={dt}"
                 return {
                     't': t_eval[:i],
                     'y': y[:i].T,
                     'success': False,
-                    'message': f'Integration failed at t={t}: {str(e)}'
+                    'message': f'Euler integration failed {error_context}: {str(e)}',
+                    'nfev': len(t_eval) - 1
                 }
         
         return {
@@ -112,11 +115,12 @@ class RK4Method(IntegrationMethod):
                 nfev += 4  # Four function evaluations per step
                 
             except Exception as e:
+                error_context = f"at t={t:.6f}, step {i}/{len(t_eval)}, dt={dt}"
                 return {
                     't': t_eval[:i],
                     'y': y[:i].T,
                     'success': False,
-                    'message': f'Integration failed at t={t}: {str(e)}',
+                    'message': f'RK4 integration failed {error_context}: {str(e)}',
                     'nfev': nfev
                 }
         
@@ -245,35 +249,38 @@ class ModelAnalyzer:
     
     @staticmethod
     def _estimate_stiffness(model: 'Model') -> bool:
-        """Heuristic stiffness estimation"""
-        # Simple heuristic: look for potential stiffness indicators
-        
-        # Check for multiple timescales
-        flow_rates = []
-        for stock in model.stocks:
-            for flow in list(stock.inflows.values()) + list(stock.outflows.values()):
-                try:
-                    rate = flow.get_rate()
-                    if isinstance(rate, (int, float)):
-                        flow_rates.append(abs(rate))
-                    elif isinstance(rate, np.ndarray):
-                        flow_rates.extend(np.abs(rate.flatten()))
-                except:
-                    continue
-        
-        if len(flow_rates) < 2:
+        """Improved stiffness estimation using Jacobian analysis"""
+        try:
+            # Get current state
+            y0 = model.get_flattened_state()
+            if len(y0) < 2:
+                return False  # Need at least 2 states for stiffness
+            
+            # Compute Jacobian numerically
+            epsilon = 1e-8
+            t = model.time
+            f0 = model.compute_derivatives(t, y0)
+            eigenvalue_estimates = []
+            
+            # Sample a few partial derivatives to estimate eigenvalues
+            for i in range(min(len(y0), 5)):  # Sample max 5 states for efficiency
+                y_pert = y0.copy()
+                y_pert[i] += epsilon
+                f_pert = model.compute_derivatives(t, y_pert)
+                eigenvalue_estimates.append(abs((f_pert[i] - f0[i]) / epsilon))
+            
+            # Check for large eigenvalue spread (stiffness indicator)
+            if len(eigenvalue_estimates) > 1:
+                max_eigen = max(eigenvalue_estimates)
+                min_eigen = min([e for e in eigenvalue_estimates if e > 1e-12])
+                if min_eigen > 0:
+                    stiffness_ratio = max_eigen / min_eigen
+                    return stiffness_ratio > 1000  # Stiff if ratio > 1000
+            
             return False
+        except Exception:
+            return False  # Conservative: assume not stiff if analysis fails   
         
-        # Check for large ratio between fastest and slowest rates
-        flow_rates = np.array(flow_rates)
-        flow_rates = flow_rates[flow_rates > 1e-12]  # Remove near-zero rates
-        
-        if len(flow_rates) < 2:
-            return False
-        
-        ratio = np.max(flow_rates) / np.min(flow_rates)
-        return ratio > 1000  # Stiffness indicator
-    
     @staticmethod
     def recommend_integration_method(model: 'Model') -> Tuple[str, dict]:
         """Recommend optimal integration method and parameters"""
@@ -366,6 +373,20 @@ class IntegrationEngine:
         # Update results with metadata
         if result['success']:
             model.update_from_flattened_results(result)
+
+            # Add this right after model.update_from_flattened_results(result)
+            validation = self._validate_integration_result(result, model)
+            result['validation'] = validation
+            
+            if not validation['valid']:
+                print(f"⚠️  Integration validation failed:")
+                for error in validation['errors']:
+                    print(f"     Error: {error}")
+                
+            if validation['warnings']:
+                for warning in validation['warnings']:
+                    print(f"     Warning: {warning}")
+            
             result['integration_method'] = method
             result['integration_time'] = integration_time
             result['method_name'] = self.methods[method].get_name()
@@ -500,6 +521,53 @@ class IntegrationEngine:
             best_method = min(successful_methods.keys(), 
                             key=lambda k: successful_methods[k]['runtime'])
             print(f"\nRecommended method based on runtime: {best_method.upper()}")
+            
+            
+    def _validate_integration_result(self, result: dict, model: 'Model') -> dict:
+        """Validate integration results for common problems"""
+        validation = {'valid': True, 'warnings': [], 'errors': []}
+        
+        if not result.get('success', False):
+            validation['valid'] = False
+            validation['errors'].append(f"Integration failed: {result.get('message', 'Unknown error')}")
+            return validation
+        
+        try:
+            t = result.get('t', [])
+            y = result.get('y', np.array([]))
+            
+            # Check 1: Non-empty results
+            if len(t) < 2:
+                validation['errors'].append("Integration produced insufficient time points")
+                validation['valid'] = False
+                return validation
+            
+            # Check 2: Finite values
+            if not np.all(np.isfinite(y)):
+                validation['errors'].append("Integration produced non-finite values (NaN/Inf)")
+                validation['valid'] = False
+                return validation
+            
+            # Check 3: Reasonable value ranges
+            max_value = np.max(np.abs(y))
+            if max_value > 1e12:
+                validation['warnings'].append(f"Very large values detected: {max_value:.2e}")
+            
+            # Check 4: Monotonic time
+            if not np.all(np.diff(t) > 0):
+                validation['errors'].append("Time values are not monotonically increasing")
+                validation['valid'] = False
+            
+            # Check 5: Negative values in stocks (if bounds exist)
+            min_value = np.min(y)
+            if min_value < -1e-10:  # Allow small numerical errors
+                validation['warnings'].append(f"Negative values detected: {min_value:.2e}")
+            
+        except Exception as e:
+            validation['errors'].append(f"Result validation failed: {str(e)}")
+            validation['valid'] = False
+        
+        return validation            
 
 # Extensions to the existing Model class to support advanced integration
 class ModelIntegrationExtensions:

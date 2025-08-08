@@ -420,7 +420,69 @@ class Model:
         """Get current simulation datetime"""
         return self._add_time_units(self.start_datetime, self.time)
     
-    
+    def validate_mass_conservation(self, tolerance: float = 1e-6) -> dict:
+        """Check if total mass is conserved in the system"""
+        try:
+            total_inflow = 0.0
+            total_outflow = 0.0
+            
+            # Calculate total system inflows and outflows
+            for stock in self.stocks:
+                for flow in stock.inflows.values():
+                    rate = flow.get_rate()
+                    total_inflow += np.sum(rate) if hasattr(rate, '__iter__') else rate
+                
+                for flow in stock.outflows.values():
+                    rate = flow.get_rate()
+                    total_outflow += np.sum(rate) if hasattr(rate, '__iter__') else rate
+            
+            # Special case: Pure source/sink systems
+            if total_outflow == 0.0 and total_inflow > 0:
+                return {
+                    'is_conserved': False,
+                    'relative_error': 1.0,
+                    'total_inflow': total_inflow,
+                    'total_outflow': total_outflow,
+                    'net_flow': total_inflow - total_outflow,
+                    'type': 'pure_source_system'
+                }
+            
+            if total_inflow == 0.0 and total_outflow > 0:
+                return {
+                    'is_conserved': False,
+                    'relative_error': 1.0,
+                    'total_inflow': total_inflow,
+                    'total_outflow': total_outflow,
+                    'net_flow': total_inflow - total_outflow,
+                    'type': 'pure_sink_system'
+                }
+            
+            # Normal case: Check balance
+            net_flow = abs(total_inflow - total_outflow)
+            total_flow = abs(total_inflow) + abs(total_outflow)
+            
+            if total_flow > 0:
+                relative_error = net_flow / total_flow
+            else:
+                relative_error = 0.0
+            
+            is_conserved = relative_error < tolerance
+            
+            return {
+                'is_conserved': is_conserved,
+                'relative_error': relative_error,
+                'total_inflow': total_inflow,
+                'total_outflow': total_outflow,
+                'net_flow': total_inflow - total_outflow,
+                'type': 'balanced_system' if is_conserved else 'unbalanced_system'
+            }
+            
+        except Exception as e:
+            return {
+                'is_conserved': False,
+                'error': str(e),
+                'relative_error': float('inf')
+            }  
     
     def step(self):
         """Perform one simulation step (basic Euler)"""
@@ -519,6 +581,13 @@ class Model:
                 print(f"  Runtime: {result.get('integration_time', 0):.3f}s")
                 print(f"  Steps: {len(result.get('t', []))}")
                 
+                conservation_check = self.validate_mass_conservation()
+                print(conservation_check)
+                if (not conservation_check['is_conserved'] and 
+                    conservation_check['relative_error'] > 1e-6 and
+                    conservation_check.get('type') not in ['pure_source_system', 'pure_sink_system']):
+                    warnings.warn(f"Mass conservation violated: {conservation_check['relative_error']:.2e} relative error")              
+                            
                 # Update model state from integration results
                 self._update_from_integration_results(result)
                 
@@ -526,12 +595,33 @@ class Model:
                 if progress_callback:
                     progress_callback(self)
                 
+                # UPDATE RESULTS FIRST
+                self._update_results()
+                
+                self._last_integration_method = result.get('integration_method', method)  # ADD THIS LINE
+
+                # THEN ADD VALIDATION TO FINAL RESULTS (MOVE THIS BLOCK HERE)
+                if hasattr(self, 'integration_engine'):
+                    validation = self.integration_engine._validate_integration_result(result, self)
+                    self.results['validation'] = validation  # ADD TO self.results instead of result
+                    print(f"🐛 DEBUG: Validation added to final results: {validation['valid']}")
+                    
+                    if not validation['valid']:
+                        print(f"⚠️  Integration validation failed:")
+                        for error in validation['errors']:
+                            print(f"     Error: {error}")
+                    
+                    if validation['warnings']:
+                        for warning in validation['warnings']:
+                            print(f"     Warning: {warning}")
+                
+                return self.results
+                
             else:
                 print(f"✗ Advanced integration failed: {result.get('message', 'Unknown error')}")
                 print("  Falling back to basic integration...")
                 return self._run_with_basic_integration(duration, until, max_steps, progress_callback)
             
-            self._update_results()
             return self.results
             
         except Exception as e:
@@ -578,7 +668,9 @@ class Model:
         steps_taken = self.step_count - start_step
         print(f"✓ Basic integration completed: {steps_taken} steps, final time: {self.time:.4f}")
         
+        
         self._update_results()
+                    
         return self.results
     
     def _update_from_integration_results(self, result):
@@ -631,17 +723,21 @@ class Model:
             # Update step count
             self.step_count = len(result['t']) - 1
     
+    
     def _update_results(self):
         """Update simulation results"""
         self.results = {
-            'simulation_time': self.time,
-            'steps': self.step_count,
-            'start_datetime': self.start_datetime,
-            'end_datetime': self.current_datetime,
-            'time_unit': self.time_unit.singular,
-            'stocks': {stock.name: stock.get_statistics() for stock in self.stocks},
-            'flows': {flow.name: flow.get_statistics() for flow in self.flows if hasattr(flow, 'get_statistics')}
-        }
+        'simulation_time': self.time,
+        'steps': self.step_count,
+        'start_datetime': self.start_datetime,
+        'end_datetime': self.current_datetime,
+        'time_unit': self.time_unit.singular,
+        'time_history': self.time_history,  # ADD THIS
+        'integration_method': getattr(self, '_last_integration_method', 'unknown'),  # ADD THIS
+        'stocks': {stock.name: stock.get_statistics() for stock in self.stocks},
+        'flows': {flow.name: flow.get_statistics() for flow in self.flows if hasattr(flow, 'get_statistics')}
+    }
+    
     
     def reset(self):
         """Reset simulation to initial state"""
