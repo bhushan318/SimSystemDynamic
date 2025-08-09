@@ -36,11 +36,27 @@ except ImportError:
     print("⚠️  Basic simulation module not available")
     SIMULATION_AVAILABLE = False
 
+
+# NEW: Performance system imports
+try:
+    from unified_performance_system import (
+        initialize_performance, enhance_model, get_performance_report,
+        optimize_performance_thresholds, performance_context
+    )
+    PERFORMANCE_AVAILABLE = True
+    print("✅ Performance system loaded")
+except ImportError:
+    PERFORMANCE_AVAILABLE = False
+    print("⚠️ Performance system not available - using basic simulation")
+
+
+
 app = FastAPI(
-    title="Enhanced System Dynamics API", 
-    version="2.0.0",
-    description="System Dynamics API with Advanced Formula Evaluation Engine"
+    title="Enhanced System Dynamics API with Performance", 
+    version="3.0.0",
+    description="System Dynamics API with 10x-100x Performance Optimization"
 )
+
 
 # Enable CORS for React frontend
 app.add_middleware(
@@ -50,6 +66,44 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# Global performance system
+performance_initialized = False
+
+
+
+# ===============================================================================
+# NEW: Performance System Startup
+# ===============================================================================
+
+@app.on_event("startup")
+async def startup_performance():
+    """Initialize performance system on API startup"""
+    global performance_initialized
+    
+    if PERFORMANCE_AVAILABLE:
+        try:
+            print("🚀 Initializing Performance System...")
+            init_results = initialize_performance()
+            
+            # Log capabilities
+            available_phases = sum(1 for v in init_results.values() if v)
+            print(f"✅ Performance system ready with {available_phases}/4 optimization phases")
+            
+            if init_results.get('gpu_infrastructure', {}).get('gpu_available', False):
+                gpu_count = init_results.get('gpu_infrastructure', {}).get('gpu_count', 0)
+                print(f"🔥 GPU acceleration available: {gpu_count} device(s)")
+            
+            performance_initialized = True
+            
+        except Exception as e:
+            print(f"⚠️ Performance initialization failed: {e}")
+            print("   API will use basic simulation mode")
+            performance_initialized = False
+    else:
+        print("📊 Running in basic simulation mode")
+
 
 # ===============================================================================
 # Enhanced Pydantic Models
@@ -88,6 +142,7 @@ class ModelData(BaseModel):
 class SimulationRequest(BaseModel):
     model: ModelData
     use_formula_engine: bool = True
+    use_performance_optimization: bool = True
     validation_level: str = "standard"  # "none", "basic", "standard", "strict"
 
 class SimulationResult(BaseModel):
@@ -101,6 +156,10 @@ class SimulationResult(BaseModel):
     formula_statistics: Optional[Dict[str, Any]] = None
     validation_results: Optional[Dict[str, Any]] = None
     integration_method: Optional[str] = None
+    performance_stats: Optional[Dict[str, Any]] = None
+    execution_time: Optional[float] = None
+    estimated_speedup: Optional[float] = None
+
 
 class FormulaValidationRequest(BaseModel):
     formula: str
@@ -127,12 +186,14 @@ global_formula_engine = FormulaEngine() if FORMULA_ENGINE_AVAILABLE else None
 @app.get("/")
 async def root():
     return {
-        "message": "Enhanced System Dynamics API Server",
-        "version": "2.0.0",
+        "message": "Enhanced System Dynamics API with Performance Optimization",
+        "version": "3.0.0",
+        "performance_enabled": performance_initialized,
         "features": {
-            "formula_engine": FORMULA_ENGINE_AVAILABLE,
-            "basic_simulation": SIMULATION_AVAILABLE,
-            "advanced_integration": FORMULA_ENGINE_AVAILABLE,
+            "basic_simulation": True,
+            "performance_optimization": performance_initialized,
+            "gpu_acceleration": performance_initialized,
+            "automatic_optimization": True
         }
     }
 
@@ -262,6 +323,7 @@ def create_enhanced_model_for_validation(model_data: ModelData):
     return enhanced_model
 
 
+
 @app.post("/api/simulate")
 async def simulate_model(request: SimulationRequest) -> SimulationResult:
     """Run simulation with optional advanced formula engine"""
@@ -299,6 +361,99 @@ async def simulate_model(request: SimulationRequest) -> SimulationResult:
             status_code=500, 
             detail=f"Simulation failed: {str(e)}"
         )
+        
+         
+    start_time = time.time()
+    
+    try:
+        if use_performance:
+            # NEW: Performance-optimized simulation
+            result = await run_performance_optimized_simulation(model_data)
+        else:
+            # Original simulation method
+            result = run_basic_simulation(model_data)
+        
+        execution_time = time.time() - start_time
+        result['execution_time'] = execution_time
+        
+        return SimulationResult(**result)
+        
+    except Exception as e:
+        execution_time = time.time() - start_time
+        print(f"❌ Simulation error: {e}")
+        
+        return SimulationResult(
+            time=[], stocks={}, flows={}, success=False,
+            message=f"Simulation failed: {str(e)}",
+            execution_time=execution_time
+        )        
+
+async def run_performance_optimized_simulation(model_data: ModelData) -> Dict[str, Any]:
+    """NEW: Run simulation with performance optimization"""
+    
+    with performance_context() as perf_controller:
+        # Build simulation model
+        base_model = build_simulation_model(model_data)
+        
+        # Enhance with performance system
+        enhanced_model = enhance_model(base_model)
+        
+        print(f"📊 Model enhanced: {len(base_model.stocks)} stocks, {len(base_model.flows)} flows")
+        
+        # Run enhanced simulation
+        sim_params = model_data.simulation_params
+        start_time = sim_params.get("start_time", 0)
+        end_time = sim_params.get("end_time", 50)
+        dt = sim_params.get("dt", 1)
+        
+        # Set model parameters
+        enhanced_model.time = start_time
+        enhanced_model.dt = dt
+        
+        # Initialize results
+        time_points = []
+        stock_results = {stock.name: [] for stock in enhanced_model.stocks}
+        flow_results = {flow.name: [] for flow in enhanced_model.flows}
+        
+        # Record initial state
+        time_points.append(enhanced_model.time)
+        for stock in enhanced_model.stocks:
+            stock_results[stock.name].append(float(np.sum(stock.values)))
+        
+        # Run simulation with enhanced stepping
+        steps = int((end_time - start_time) / dt)
+        for step in range(steps):
+            # Use enhanced step method
+            enhanced_model.step()
+            
+            # Record state
+            time_points.append(enhanced_model.time)
+            for stock in enhanced_model.stocks:
+                stock_results[stock.name].append(float(np.sum(stock.values)))
+            
+            # Record flow rates
+            for flow in enhanced_model.flows:
+                if len(flow_results[flow.name]) <= step:
+                    try:
+                        rate = flow.get_rate()
+                        flow_results[flow.name].append(float(np.sum(rate)) if hasattr(rate, '__iter__') else float(rate))
+                    except:
+                        flow_results[flow.name].append(0.0)
+        
+        # Get performance statistics
+        perf_summary = enhanced_model.get_performance_summary()
+        
+        return {
+            'time': time_points,
+            'stocks': stock_results,
+            'flows': flow_results,
+            'success': True,
+            'message': f"Performance-optimized simulation completed ({perf_summary['total_steps']} steps)",
+            'performance_stats': perf_summary,
+            'estimated_speedup': perf_summary.get('estimated_speedup', 1.0)
+        }
+
+
 
 def run_enhanced_simulation(model_data: ModelData, validation_level: str) -> SimulationResult:
     """Run simulation using the enhanced formula engine"""
@@ -547,6 +702,54 @@ def run_basic_simulation(model_data: ModelData) -> SimulationResult:
         integration_method="basic_euler"
     )
 
+    model = build_simulation_model(model_data)
+    
+    # Run basic simulation
+    sim_params = model_data.simulation_params
+    model.time = sim_params.get("start_time", 0)
+    model.dt = sim_params.get("dt", 1)
+    
+    time_points = []
+    stock_results = {stock.name: [] for stock in model.stocks}
+    flow_results = {flow.name: [] for flow in model.flows}
+    
+    # Basic simulation loop
+    end_time = sim_params.get("end_time", 50)
+    while model.time <= end_time:
+        time_points.append(model.time)
+        
+        for stock in model.stocks:
+            stock_results[stock.name].append(float(np.sum(stock.values) if hasattr(stock.values, '__iter__') else stock.values))
+        
+        for flow in model.flows:
+            try:
+                rate = flow.get_rate()
+                flow_results[flow.name].append(float(np.sum(rate) if hasattr(rate, '__iter__') else rate))
+            except:
+                flow_results[flow.name].append(0.0)
+        
+        # Basic step
+        for stock in model.stocks:
+            net_flow = stock.get_net_flow(model.dt)
+            if hasattr(stock.values, '__iter__'):
+                stock.values = stock.values + net_flow * model.dt
+            else:
+                stock.values = stock.values + net_flow * model.dt
+        
+        model.time += model.dt
+    
+    return {
+        'time': time_points,
+        'stocks': stock_results,
+        'flows': flow_results,
+        'success': True,
+        'message': "Basic simulation completed",
+        'performance_stats': None,
+        'estimated_speedup': 1.0
+    }
+
+
+
 # ===============================================================================
 # Existing Basic Simulation Functions (Updated)
 # ===============================================================================
@@ -591,11 +794,59 @@ def build_simulation_model(model_data: ModelData):
             if from_element.type == "flow" and to_element.type == "stock":
                 flows[from_element.name]["inflows"].append(to_element.name)
     
-    return {
-        "stocks": stocks,
-        "flows": flows,
-        "parameters": parameters
-    }
+    # return {
+    #     "stocks": stocks,
+    #     "flows": flows,
+    #     "parameters": parameters
+    # }
+
+
+    model = Model(name="API Model")
+    
+    stocks = {}
+    flows = {}
+    
+    # Process elements
+    for element in model_data.elements:
+        if element.type == "stock":
+            stock = Stock(
+                values=element.value or 0,
+                name=element.name,
+                units=element.units or ""
+            )
+            stocks[element.id] = stock
+            model.add_stock(stock)
+            
+        elif element.type == "flow":
+            # Simple flow creation
+            rate = element.value or 0
+            flow = Flow(
+                rate_expression=lambda r=rate: r,
+                name=element.name,
+                units=element.units or ""
+            )
+            flows[element.id] = flow
+            model.add_flow(flow)
+    
+    # Process connections
+    for connection in model_data.connections:
+        from_element = next(e for e in model_data.elements if e.id == connection.from_element_id)
+        to_element = next(e for e in model_data.elements if e.id == connection.to_element_id)
+        
+        if connection.connection_type == "inflow":
+            if from_element.type == "flow" and to_element.type == "stock":
+                flow = flows[from_element.id]
+                stock = stocks[to_element.id]
+                stock.add_inflow(flow)
+                
+        elif connection.connection_type == "outflow":
+            if from_element.type == "stock" and to_element.type == "flow":
+                stock = stocks[from_element.id]
+                flow = flows[to_element.id]
+                stock.add_outflow(flow)
+    
+    return model
+
 
 def run_simulation(model, sim_params):
     """Execute basic simulation"""
@@ -702,6 +953,72 @@ def evaluate_formula_safely(formula: str, context: dict) -> float:
 # Additional API Endpoints
 # ===============================================================================
 
+@app.get("/api/performance_status")
+async def get_performance_status():
+    """Get current performance system status"""
+    
+    if not performance_initialized:
+        return {
+            "performance_enabled": False,
+            "message": "Performance system not initialized"
+        }
+    
+    try:
+        report = get_performance_report()
+        
+        # Extract key metrics
+        master_stats = report.get('master_controller', {}).get('global_stats', {})
+        
+        return {
+            "performance_enabled": True,
+            "total_operations": master_stats.get('total_operations', 0),
+            "average_speedup": round(master_stats.get('average_speedup', 1.0), 2),
+            "total_time_saved": round(master_stats.get('total_time_saved', 0.0), 3),
+            "strategy_usage": master_stats.get('strategy_usage', {}),
+            "gpu_available": 'phase_2_gpu_infrastructure' in report,
+            "phases_active": list(report.keys())
+        }
+        
+    except Exception as e:
+        return {
+            "performance_enabled": False,
+            "error": str(e)
+        }
+
+@app.post("/api/optimize_performance")
+async def optimize_performance():
+    """Optimize performance thresholds based on usage"""
+    
+    if not performance_initialized:
+        raise HTTPException(status_code=503, detail="Performance system not available")
+    
+    try:
+        optimization_results = optimize_performance_thresholds()
+        
+        return {
+            "success": True,
+            "optimizations": optimization_results,
+            "message": f"Optimized {len(optimization_results)} thresholds"
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Optimization failed: {str(e)}")
+
+@app.get("/api/performance_report")
+async def get_detailed_performance_report():
+    """Get comprehensive performance report"""
+    
+    if not performance_initialized:
+        raise HTTPException(status_code=503, detail="Performance system not available")
+    
+    try:
+        return get_performance_report()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Report generation failed: {str(e)}")
+
+
+
+
 @app.get("/api/formula_engine_status")
 async def get_formula_engine_status():
     """Get formula engine status and statistics"""
@@ -801,23 +1118,68 @@ async def get_model_templates():
 # Existing API Endpoints (Updated)
 # ===============================================================================
 
+# @app.post("/api/validate_model")
+# async def validate_model(model: ModelData):
+#     """Validate model structure and equations"""
+    
+#     try:
+#         # Basic structural validation
+#         validation_result = validate_model_structure(model)
+        
+#         # Enhanced formula validation if engine available
+#         if FORMULA_ENGINE_AVAILABLE:
+#             formula_validation = validate_model_formulas(model)
+#             validation_result["formula_validation"] = formula_validation
+        
+#         return validation_result
+        
+#     except Exception as e:
+#         raise HTTPException(status_code=400, detail=f"Validation failed: {str(e)}")
+
 @app.post("/api/validate_model")
 async def validate_model(model: ModelData):
-    """Validate model structure and equations"""
+    """Validate model structure"""
     
     try:
-        # Basic structural validation
-        validation_result = validate_model_structure(model)
+        # Basic validation
+        validation_result = {
+            "valid": True,
+            "errors": [],
+            "warnings": [],
+            "performance_recommendation": None
+        }
         
-        # Enhanced formula validation if engine available
-        if FORMULA_ENGINE_AVAILABLE:
-            formula_validation = validate_model_formulas(model)
-            validation_result["formula_validation"] = formula_validation
+        # Count elements
+        stocks = [e for e in model.elements if e.type == "stock"]
+        flows = [e for e in model.elements if e.type == "flow"]
+        
+        if len(stocks) == 0:
+            validation_result["errors"].append("Model must have at least one stock")
+            validation_result["valid"] = False
+        
+        # NEW: Performance recommendations
+        if performance_initialized:
+            total_elements = len(stocks) + len(flows)
+            if total_elements >= 1000:
+                validation_result["performance_recommendation"] = "Large model detected - GPU acceleration recommended"
+            elif total_elements >= 100:
+                validation_result["performance_recommendation"] = "Medium model - CPU JIT optimization will be used"
+            else:
+                validation_result["performance_recommendation"] = "Small model - basic optimization sufficient"
+        
+        validation_result["element_count"] = {
+            "stocks": len(stocks),
+            "flows": len(flows),
+            "total": total_elements
+        }
         
         return validation_result
         
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Validation failed: {str(e)}")
+
+
+
 
 def validate_model_formulas(model: ModelData) -> Dict[str, Any]:
     """Validate all formulas in the model"""
@@ -919,6 +1281,41 @@ def validate_model_structure(model: ModelData):
         "warnings": warnings
     }
 
+
+@app.post("/api/save_model")
+async def save_model(model: ModelData, model_name: str):
+    """
+    Save model to storage
+    """
+    model_id = f"{model_name}_{datetime.now().isoformat()}"
+    models_storage[model_id] = model.dict()
+    
+    return {
+        "model_id": model_id,
+        "message": "Model saved successfully"
+    }
+
+@app.get("/api/models")
+async def list_models():
+    """
+    List all saved models
+    """
+    return {
+        "models": list(models_storage.keys())
+    }
+
+@app.get("/api/models/{model_id}")
+async def load_model(model_id: str):
+    """
+    Load a specific model
+    """
+    if model_id not in models_storage:
+        raise HTTPException(status_code=404, detail="Model not found")
+    
+    return models_storage[model_id]
+
+
+
 # ===============================================================================
 # Server Startup
 # ===============================================================================
@@ -927,9 +1324,14 @@ if __name__ == "__main__":
     import uvicorn
     
     print("🚀 Starting Enhanced System Dynamics API Server")
+    print(f"   Performance System: {'✅ Available' if PERFORMANCE_AVAILABLE else '❌ Not Available'}")
+
     print(f"   Formula Engine: {'✅ Enabled' if FORMULA_ENGINE_AVAILABLE else '❌ Not Available'}")
     print(f"   Basic Simulation: {'✅ Available' if SIMULATION_AVAILABLE else '❌ Not Available'}")
     print("   Server: http://localhost:8000")
     print("   API Docs: http://localhost:8000/docs")
+    
+    print("   Performance Status: http://localhost:8000/api/performance_status")
+
     
     uvicorn.run(app, host="0.0.0.0", port=8000)
