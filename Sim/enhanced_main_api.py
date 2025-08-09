@@ -1181,105 +1181,40 @@ async def validate_model(model: ModelData):
 
 
 
-def validate_model_formulas(model: ModelData) -> Dict[str, Any]:
-    """Validate all formulas in the model"""
+@app.post("/api/validate_model")
+async def validate_model(model: ModelData):
+    """Validate model structure and equations"""
     
-    validation = {
-        "valid": True,
-        "element_validations": {},
-        "auxiliary_validations": {},
-        "errors": [],
-        "warnings": []
-    }
-    
-    # Create context with available variables
-    context_vars = set()
-    
-    # Add stock names
-    for element in model.elements:
-        if element.type in ["stock", "parameter"]:
-            context_vars.add(element.name)
-    
-    # Add parameters and constants
-    context_vars.update(model.parameters.keys())
-    context_vars.update(model.constants.keys())
-    context_vars.update(model.auxiliaries.keys())
-    
-    # Validate element formulas
-    for element in model.elements:
-        if element.formula:
-            try:
-                # Create mock context for validation
-                context = ModelContext(
-                    stocks={name: 100 for name in context_vars if name in [e.name for e in model.elements if e.type == "stock"]},
-                    parameters={**model.parameters, **model.constants}
-                )
-                
-                element_validation = global_formula_engine.validate_formula(element.formula, context)
-                validation["element_validations"][element.name] = element_validation
-                
-                if not element_validation["valid"]:
-                    validation["valid"] = False
-                    validation["errors"].extend([f"{element.name}: {err}" for err in element_validation["errors"]])
-                
-                validation["warnings"].extend([f"{element.name}: {warn}" for warn in element_validation["warnings"]])
-                
-            except Exception as e:
-                validation["valid"] = False
-                validation["errors"].append(f"Error validating {element.name}: {str(e)}")
-    
-    # Validate auxiliary formulas
-    for aux_name, aux_formula in model.auxiliaries.items():
-        try:
-            context = ModelContext(
-                stocks={name: 100 for name in context_vars if name in [e.name for e in model.elements if e.type == "stock"]},
-                parameters={**model.parameters, **model.constants}
-            )
-            
-            aux_validation = global_formula_engine.validate_formula(aux_formula, context)
-            validation["auxiliary_validations"][aux_name] = aux_validation
-            
-            if not aux_validation["valid"]:
-                validation["valid"] = False
-                validation["errors"].extend([f"Auxiliary {aux_name}: {err}" for err in aux_validation["errors"]])
-            
-            validation["warnings"].extend([f"Auxiliary {aux_name}: {warn}" for warn in aux_validation["warnings"]])
-            
-        except Exception as e:
-            validation["valid"] = False
-            validation["errors"].append(f"Error validating auxiliary {aux_name}: {str(e)}")
-    
-    return validation
-
-def validate_model_structure(model: ModelData):
-    """Basic model structure validation"""
-    
-    errors = []
-    warnings = []
-    
-    # Check for stocks without initial values
-    for element in model.elements:
-        if element.type == "stock" and not element.value and not element.formula:
-            warnings.append(f"Stock '{element.name}' has no initial value or formula")
+    try:
+        from unified_validation import get_unified_validator
+        validator = get_unified_validator()
         
-        if element.type == "flow" and not element.formula:
-            errors.append(f"Flow '{element.name}' has no rate formula")
-    
-    # Check for disconnected elements
-    connected_elements = set()
-    for connection in model.connections:
-        connected_elements.add(connection.from_element_id)
-        connected_elements.add(connection.to_element_id)
-    
-    for element in model.elements:
-        if element.id not in connected_elements and element.type not in ["parameter"]:
-            warnings.append(f"Element '{element.name}' is not connected to other elements")
-    
-    return {
-        "valid": len(errors) == 0,
-        "errors": errors,
-        "warnings": warnings
-    }
+        # Convert API model to internal model for validation
+        internal_model = convert_api_model_to_internal(model)
+        
+        # Use unified validation
+        report = validator.validate_all(internal_model, 'model')
+        
+        return {
+            'valid': report.is_valid,
+            'issues': [
+                {
+                    'severity': issue.severity.value,
+                    'category': issue.category,
+                    'message': issue.message,
+                    'suggestion': issue.suggestion,
+                    'element': issue.element_name
+                } for issue in report.issues
+            ],
+            'summary': {
+                'total_issues': len(report.issues),
+                'error_count': len([i for i in report.issues if i.severity.value == 'error']),
+                'warning_count': len([i for i in report.issues if i.severity.value == 'warning'])
+            }
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Validation failed: {str(e)}")
 
 
 @app.post("/api/save_model")

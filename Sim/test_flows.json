@@ -1,0 +1,33 @@
+{
+  "flows": [
+    {
+      "name": "population_growth",
+      "type": "proportional",
+      "rate": 0.02,
+      "debug": false
+    },
+    {
+      "name": "aging_young_to_middle",
+      "type": "aging",
+      "from_age_index": 0,
+      "to_age_index": 1,
+      "rate": 0.05,
+      "age_dimension": 0
+    },
+    {
+      "name": "migration_north_to_south",
+      "type": "migration",
+      "from_region_index": 0,
+      "to_region_index": 1,
+      "rate": 0.01,
+      "region_dimension": 1
+    },
+    {
+      "name": "threshold_migration",
+      "type": "threshold",
+      "threshold": 100.0,
+      "rate": 0.03,
+      "comparison": "greater"
+    }
+  ]
+}

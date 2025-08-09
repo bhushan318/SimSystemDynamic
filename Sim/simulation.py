@@ -705,67 +705,20 @@ class Model:
     
     def validate_mass_conservation(self, tolerance: float = 1e-6) -> dict:
         """Check if total mass is conserved in the system"""
-        try:
-            total_inflow = 0.0
-            total_outflow = 0.0
-            
-            # Calculate total system inflows and outflows
-            for stock in self.stocks:
-                for flow in stock.inflows.values():
-                    rate = flow.get_rate()
-                    total_inflow += np.sum(rate) if hasattr(rate, '__iter__') else rate
-                
-                for flow in stock.outflows.values():
-                    rate = flow.get_rate()
-                    total_outflow += np.sum(rate) if hasattr(rate, '__iter__') else rate
-            
-            # Special case: Pure source/sink systems
-            if total_outflow == 0.0 and total_inflow > 0:
-                return {
-                    'is_conserved': False,
-                    'relative_error': 1.0,
-                    'total_inflow': total_inflow,
-                    'total_outflow': total_outflow,
-                    'net_flow': total_inflow - total_outflow,
-                    'type': 'pure_source_system'
-                }
-            
-            if total_inflow == 0.0 and total_outflow > 0:
-                return {
-                    'is_conserved': False,
-                    'relative_error': 1.0,
-                    'total_inflow': total_inflow,
-                    'total_outflow': total_outflow,
-                    'net_flow': total_inflow - total_outflow,
-                    'type': 'pure_sink_system'
-                }
-            
-            # Normal case: Check balance
-            net_flow = abs(total_inflow - total_outflow)
-            total_flow = abs(total_inflow) + abs(total_outflow)
-            
-            if total_flow > 0:
-                relative_error = net_flow / total_flow
-            else:
-                relative_error = 0.0
-            
-            is_conserved = relative_error < tolerance
-            
-            return {
-                'is_conserved': is_conserved,
-                'relative_error': relative_error,
-                'total_inflow': total_inflow,
-                'total_outflow': total_outflow,
-                'net_flow': total_inflow - total_outflow,
-                'type': 'balanced_system' if is_conserved else 'unbalanced_system'
-            }
-            
-        except Exception as e:
-            return {
-                'is_conserved': False,
-                'error': str(e),
-                'relative_error': float('inf')
-            }  
+        from unified_validation import get_unified_validator
+        validator = get_unified_validator()
+        report = validator.validate_mass_conservation(self)
+        
+        # Backward compatibility wrapper
+        return {
+            'is_conserved': report.is_valid,
+            'relative_error': report.get_metric('relative_error', 0.0),
+            'total_inflow': report.get_metric('total_inflow', 0.0),
+            'total_outflow': report.get_metric('total_outflow', 0.0),
+            'net_flow': report.get_metric('net_flow', 0.0),
+            'type': 'unified_validation'
+        }
+
     
     def step(self):
         """Perform one simulation step (basic Euler)"""

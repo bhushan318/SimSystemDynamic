@@ -538,50 +538,18 @@ class IntegrationEngine:
             
     def _validate_integration_result(self, result: dict, model: 'Model') -> dict:
         """Validate integration results for common problems"""
-        validation = {'valid': True, 'warnings': [], 'errors': []}
+        from unified_validation import get_unified_validator
+        validator = get_unified_validator()
         
-        if not result.get('success', False):
-            validation['valid'] = False
-            validation['errors'].append(f"Integration failed: {result.get('message', 'Unknown error')}")
-            return validation
+        report = validator.validate_all(result, 'integration_result')
         
-        try:
-            t = result.get('t', [])
-            y = result.get('y', np.array([]))
-            
-            # Check 1: Non-empty results
-            if len(t) < 2:
-                validation['errors'].append("Integration produced insufficient time points")
-                validation['valid'] = False
-                return validation
-            
-            # Check 2: Finite values
-            if not np.all(np.isfinite(y)):
-                validation['errors'].append("Integration produced non-finite values (NaN/Inf)")
-                validation['valid'] = False
-                return validation
-            
-            # Check 3: Reasonable value ranges
-            max_value = np.max(np.abs(y))
-            if max_value > 1e12:
-                validation['warnings'].append(f"Very large values detected: {max_value:.2e}")
-            
-            # Check 4: Monotonic time
-            if not np.all(np.diff(t) > 0):
-                validation['errors'].append("Time values are not monotonically increasing")
-                validation['valid'] = False
-            
-            # Check 5: Negative values in stocks (if bounds exist)
-            min_value = np.min(y)
-            if min_value < -1e-10:  # Allow small numerical errors
-                validation['warnings'].append(f"Negative values detected: {min_value:.2e}")
-            
-        except Exception as e:
-            validation['errors'].append(f"Result validation failed: {str(e)}")
-            validation['valid'] = False
-        
-        return validation            
-
+        # Backward compatibility wrapper
+        return {
+            'valid': report.is_valid,
+            'warnings': [issue.message for issue in report.issues if issue.severity.value == 'warning'],
+            'errors': [issue.message for issue in report.issues if issue.severity.value == 'error'],
+            'quality_metrics': report.get_all_metrics()
+        }
 
 class MemoryManager:
     """Memory management for large-scale models"""

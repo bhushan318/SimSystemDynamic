@@ -330,23 +330,19 @@ class MultiDimensionalFlow:
     def _validate_inputs(self, from_values: np.ndarray, to_values: np.ndarray, 
                         context: FlowContext) -> List[str]:
         """Comprehensive input validation"""
-        errors = []
+        from unified_validation import get_unified_validator
+        validator = get_unified_validator()
         
-        # Array validation
-        if not isinstance(from_values, np.ndarray) or not isinstance(to_values, np.ndarray):
-            errors.append("from_values and to_values must be numpy arrays")
+        # Package inputs for validation
+        validation_target = {
+            'from_values': from_values,
+            'to_values': to_values,
+            'context': context,
+            'flow_name': self.name
+        }
         
-        if from_values.size == 0 or to_values.size == 0:
-            errors.append("Arrays cannot be empty")
-        
-        if not np.all(np.isfinite(from_values)) or not np.all(np.isfinite(to_values)):
-            errors.append("Arrays contain non-finite values")
-        
-        # Context validation
-        if context.dt <= 0:
-            errors.append(f"Invalid time step dt={context.dt}")
-        
-        return errors
+        report = validator.validate_all(validation_target, 'flow_inputs')
+        return [issue.message for issue in report.issues if issue.severity.value == 'error']
     
     def _validate_flow_shapes(self, from_values: np.ndarray, to_values: np.ndarray, 
                             rate: np.ndarray, from_mask: np.ndarray, to_mask: np.ndarray):

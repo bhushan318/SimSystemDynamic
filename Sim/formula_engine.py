@@ -678,16 +678,19 @@ class FormulaEngine:
     
     def validate_formula(self, formula: str, context: ModelContext = None) -> Dict[str, Any]:
         """Validate formula without evaluating it"""
-        if context is None:
-            context = ModelContext()
+        from unified_validation import get_unified_validator
+        validator = get_unified_validator()
+        report = validator.validate_formula(formula, context)
         
-        allowed_variables = set()
-        allowed_variables.update(context.stocks.keys())
-        allowed_variables.update(context.parameters.keys())
-        allowed_variables.update(context.auxiliaries.keys())
+        # Backward compatibility wrapper
+        return {
+            'valid': report.is_valid,
+            'errors': [issue.message for issue in report.issues if issue.severity.value == 'error'],
+            'warnings': [issue.message for issue in report.issues if issue.severity.value == 'warning'],
+            'dependencies': report.get_metric('dependencies', set()),
+            'complexity_score': report.get_metric('complexity_score', 0)
+        }
         
-        return self.compiler.validator.validate_formula(formula, allowed_variables)
-    
     def get_formula_dependencies(self, formula: str) -> Set[str]:
         """Get formula dependencies without compilation"""
         try:
