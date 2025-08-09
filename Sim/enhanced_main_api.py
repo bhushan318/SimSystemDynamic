@@ -37,6 +37,15 @@ except ImportError:
     SIMULATION_AVAILABLE = False
 
 
+
+# Add this import near the top with other imports
+try:
+    from unified_validation import get_unified_validator, ValidationLevel
+    UNIFIED_VALIDATION_AVAILABLE = True
+except ImportError:
+    UNIFIED_VALIDATION_AVAILABLE = False
+    print("⚠️  Unified validation framework not available - using fallback validation")
+
 # NEW: Performance system imports
 try:
     from unified_performance_system import (
@@ -199,81 +208,189 @@ async def root():
 
 @app.post("/api/validate_formula")
 async def validate_formula(request: FormulaValidationRequest) -> FormulaValidationResult:
-    """Validate a formula using the advanced formula engine"""
-    
-    if not FORMULA_ENGINE_AVAILABLE:
-        raise HTTPException(
-            status_code=503, 
-            detail="Formula engine not available. Please install formula_engine module."
-        )
+    """Validate formula syntax and security using unified framework"""
     
     try:
-        # Create context for validation
-        context = ModelContext(
-            stocks=request.context.get('stocks', {}),
-            parameters=request.context.get('parameters', {}),
-            auxiliaries=request.context.get('auxiliaries', {})
-        )
+        from unified_validation import get_unified_validator, ValidationLevel
         
-        # Validate formula
-        validation = global_formula_engine.validate_formula(request.formula, context)
+        # Get unified validator
+        validator = get_unified_validator()
+        
+        # Validate formula using unified framework
+        report = validator.validate_formula(request.formula, request.context)
+        
+        # Extract dependencies (if available in details)
+        dependencies = []
+        complexity_score = 0
+        
+        for issue in report.issues:
+            if issue.details:
+                if 'dependencies' in issue.details:
+                    dependencies.extend(issue.details['dependencies'])
+                if 'complexity_score' in issue.details:
+                    complexity_score = max(complexity_score, issue.details['complexity_score'])
         
         return FormulaValidationResult(
-            valid=validation['valid'],
-            errors=validation['errors'],
-            warnings=validation['warnings'],
-            dependencies=list(validation['dependencies']),
-            complexity_score=validation['complexity_score']
+            valid=report.is_valid,
+            errors=[issue.message for issue in report.issues if issue.severity.value in ['error', 'critical']],
+            warnings=[issue.message for issue in report.issues if issue.severity.value == 'warning'],
+            dependencies=list(set(dependencies)),  # Remove duplicates
+            complexity_score=complexity_score,
+            validation_framework="unified"
         )
         
     except Exception as e:
+        # Fallback to old method if available
+        if FORMULA_ENGINE_AVAILABLE:
+            try:
+                context = ModelContext(
+                    stocks=request.context.get('stocks', {}),
+                    parameters=request.context.get('parameters', {}),
+                    auxiliaries=request.context.get('auxiliaries', {})
+                )
+                
+                validation = global_formula_engine.validate_formula(request.formula, context)
+                
+                return FormulaValidationResult(
+                    valid=validation['valid'],
+                    errors=validation['errors'],
+                    warnings=validation['warnings'] + [f"Used fallback validation: {str(e)}"],
+                    dependencies=list(validation['dependencies']),
+                    complexity_score=validation['complexity_score'],
+                    validation_framework="fallback"
+                )
+            except Exception:
+                pass
+        
         return FormulaValidationResult(
             valid=False,
-            errors=[f"Validation failed: {str(e)}"],
+            errors=[f"All validation methods failed: {str(e)}"],
             warnings=[],
             dependencies=[],
-            complexity_score=0
+            complexity_score=0,
+            validation_framework="error"
         )
+
+@app.post("/api/validate_model")
+async def validate_model_api(model: ModelData):
+    """Validate model structure and equations using unified framework"""
+    
+    try:
+        if not UNIFIED_VALIDATION_AVAILABLE:
+            # Fallback to basic validation
+            return validate_model(model)
+        
+        from unified_validation import get_unified_validator, ValidationLevel
+        validator = get_unified_validator()
+        
+        # Convert API model to internal model for validation
+        try:
+            internal_model = create_enhanced_model_for_validation(model)
+            report = validator.validate_all(internal_model, 'model', ValidationLevel.STANDARD)
+        except Exception as conversion_error:
+            # If conversion fails, try validating the API model directly
+            report = validator.validate_all(model, 'model', ValidationLevel.BASIC)
+        
+        return {
+            'valid': report.is_valid,
+            'validation_framework': 'unified',
+            'issues': [
+                {
+                    'severity': issue.severity.value,
+                    'category': issue.category,
+                    'message': issue.message,
+                    'suggestion': issue.suggestion,
+                    'element': issue.element_name,
+                    'details': issue.details
+                } for issue in report.issues
+            ],
+            'summary': {
+                'total_issues': len(report.issues),
+                'error_count': len([i for i in report.issues if i.severity.value == 'error']),
+                'warning_count': len([i for i in report.issues if i.severity.value == 'warning']),
+                'critical_count': len([i for i in report.issues if i.severity.value == 'critical']),
+                'info_count': len([i for i in report.issues if i.severity.value == 'info'])
+            },
+            'validator_statistics': validator.get_validation_statistics()
+        }
+        
+    except Exception as e:
+        # Ultimate fallback
+        return {
+            'valid': False,
+            'validation_framework': 'error',
+            'issues': [
+                {
+                    'severity': 'error',
+                    'category': 'validation_framework',
+                    'message': f'Validation system failed: {str(e)}',
+                    'suggestion': 'Check validation framework installation',
+                    'element': None
+                }
+            ],
+            'summary': {'total_issues': 1, 'error_count': 1, 'warning_count': 0}
+        }
 
 
 @app.post("/api/validate_model_comprehensive")
 async def validate_model_comprehensive(model: ModelData):
-    """Comprehensive model validation before simulation"""
+    """Comprehensive model validation using unified framework"""
     
     try:
-        from model_validation import validate_model, ValidationLevel
+        from unified_validation import get_unified_validator, ValidationLevel
+        
+        # Get unified validator instance
+        validator = get_unified_validator()
         
         # Create temporary enhanced model for validation
         temp_model = create_enhanced_model_for_validation(model)
         
-        # Run validation
-        report = validate_model(temp_model, level="standard", include_behavioral=False)
+        # Run comprehensive validation using unified framework
+        report = validator.validate_all(temp_model, 'model', ValidationLevel.COMPREHENSIVE)
         
         return {
             "valid": report.is_valid,
+            "validation_framework": "unified",  # Indicate new framework usage
             "issues": [
                 {
                     "severity": issue.severity.value,
                     "category": issue.category,
                     "message": issue.message,
                     "suggestion": issue.suggestion,
-                    "element": issue.element_name
+                    "element": issue.element_name,
+                    "details": issue.details
                 } for issue in report.issues
             ],
             "summary": {
-                "total_issues": report.total_issues,
-                "errors": report.error_count,
-                "warnings": report.warning_count
-            }
+                "total_issues": len(report.issues),
+                "error_count": len([i for i in report.issues if i.severity.value == 'error']),
+                "warning_count": len([i for i in report.issues if i.severity.value == 'warning']),
+                "info_count": len([i for i in report.issues if i.severity.value == 'info']),
+                "critical_count": len([i for i in report.issues if i.severity.value == 'critical'])
+            },
+            "validator_performance": validator.get_validation_statistics()
         }
         
     except Exception as e:
-        return {
-            "valid": False,
-            "issues": [{"severity": "error", "message": f"Validation failed: {str(e)}"}],
-            "summary": {"total_issues": 1, "errors": 1, "warnings": 0}
-        }
-
+        # Fallback to basic validation if unified framework fails
+        try:
+            from model_validation import validate_model
+            temp_model = create_enhanced_model_for_validation(model)
+            report = validate_model(temp_model, level="basic", include_behavioral=False)
+            
+            return {
+                "valid": report.is_valid,
+                "validation_framework": "fallback",
+                "issues": [{"severity": "warning", "message": f"Used fallback validation due to: {str(e)}"}],
+                "summary": {"total_issues": 1, "errors": 0, "warnings": 1}
+            }
+        except Exception as fallback_error:
+            return {
+                "valid": False,
+                "validation_framework": "error",
+                "issues": [{"severity": "error", "message": f"All validation failed: {str(fallback_error)}"}],
+                "summary": {"total_issues": 1, "errors": 1, "warnings": 0}
+            }
 def create_enhanced_model_for_validation(model_data: ModelData):
     """Create enhanced model just for validation (without full simulation setup)"""
     
@@ -1118,54 +1235,43 @@ async def get_model_templates():
 # Existing API Endpoints (Updated)
 # ===============================================================================
 
-# @app.post("/api/validate_model")
-# async def validate_model(model: ModelData):
-#     """Validate model structure and equations"""
-    
-#     try:
-#         # Basic structural validation
-#         validation_result = validate_model_structure(model)
-        
-#         # Enhanced formula validation if engine available
-#         if FORMULA_ENGINE_AVAILABLE:
-#             formula_validation = validate_model_formulas(model)
-#             validation_result["formula_validation"] = formula_validation
-        
-#         return validation_result
-        
-#     except Exception as e:
-#         raise HTTPException(status_code=400, detail=f"Validation failed: {str(e)}")
-
-@app.post("/api/validate_model")
-async def validate_model(model: ModelData):
-    """Validate model structure"""
+def validate_model(model: ModelData):
+    """Validate model structure using unified framework"""
     
     try:
-        # Basic validation
+        from unified_validation import get_unified_validator, ValidationLevel
+        
+        # Get unified validator
+        validator = get_unified_validator()
+        
+        # Convert to internal model for validation
+        try:
+            internal_model = create_enhanced_model_for_validation(model)
+            report = validator.validate_all(internal_model, 'model', ValidationLevel.BASIC)
+        except Exception:
+            # Fallback: validate the API model directly
+            report = validator.validate_all(model, 'model', ValidationLevel.BASIC)
+        
+        # Convert to legacy format for backward compatibility
         validation_result = {
-            "valid": True,
-            "errors": [],
-            "warnings": [],
-            "performance_recommendation": None
+            "valid": report.is_valid,
+            "errors": [issue.message for issue in report.issues if issue.severity.value == 'error'],
+            "warnings": [issue.message for issue in report.issues if issue.severity.value == 'warning'],
+            "performance_recommendation": None,
+            "validation_framework": "unified"
         }
         
-        # Count elements
+        # Add performance recommendations based on model size
         stocks = [e for e in model.elements if e.type == "stock"]
         flows = [e for e in model.elements if e.type == "flow"]
+        total_elements = len(stocks) + len(flows)
         
-        if len(stocks) == 0:
-            validation_result["errors"].append("Model must have at least one stock")
-            validation_result["valid"] = False
-        
-        # NEW: Performance recommendations
-        if performance_initialized:
-            total_elements = len(stocks) + len(flows)
-            if total_elements >= 1000:
-                validation_result["performance_recommendation"] = "Large model detected - GPU acceleration recommended"
-            elif total_elements >= 100:
-                validation_result["performance_recommendation"] = "Medium model - CPU JIT optimization will be used"
-            else:
-                validation_result["performance_recommendation"] = "Small model - basic optimization sufficient"
+        if total_elements >= 1000:
+            validation_result["performance_recommendation"] = "Large model detected - GPU acceleration recommended"
+        elif total_elements >= 100:
+            validation_result["performance_recommendation"] = "Medium model - CPU JIT optimization will be used"
+        else:
+            validation_result["performance_recommendation"] = "Small model - basic optimization sufficient"
         
         validation_result["element_count"] = {
             "stocks": len(stocks),
@@ -1176,45 +1282,15 @@ async def validate_model(model: ModelData):
         return validation_result
         
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Validation failed: {str(e)}")
-
-
-
-
-@app.post("/api/validate_model")
-async def validate_model(model: ModelData):
-    """Validate model structure and equations"""
-    
-    try:
-        from unified_validation import get_unified_validator
-        validator = get_unified_validator()
-        
-        # Convert API model to internal model for validation
-        internal_model = convert_api_model_to_internal(model)
-        
-        # Use unified validation
-        report = validator.validate_all(internal_model, 'model')
-        
+        # Emergency fallback
         return {
-            'valid': report.is_valid,
-            'issues': [
-                {
-                    'severity': issue.severity.value,
-                    'category': issue.category,
-                    'message': issue.message,
-                    'suggestion': issue.suggestion,
-                    'element': issue.element_name
-                } for issue in report.issues
-            ],
-            'summary': {
-                'total_issues': len(report.issues),
-                'error_count': len([i for i in report.issues if i.severity.value == 'error']),
-                'warning_count': len([i for i in report.issues if i.severity.value == 'warning'])
-            }
+            "valid": False,
+            "errors": [f"Validation framework failed: {str(e)}"],
+            "warnings": [],
+            "performance_recommendation": None,
+            "validation_framework": "error"
         }
-        
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Validation failed: {str(e)}")
+
 
 
 @app.post("/api/save_model")

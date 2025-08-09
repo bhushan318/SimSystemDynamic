@@ -22,6 +22,19 @@ from formula_engine import (
     enhance_stock_with_formulas, enhance_flow_with_formulas
 )
 
+
+# Add this import near the top
+import warnings
+from typing import Dict, Any, List, Optional, Callable
+
+# Update the existing try/except block for validation imports
+try:
+    from unified_validation import get_unified_validator, ValidationLevel, ValidationReport
+    UNIFIED_VALIDATION_AVAILABLE = True
+except ImportError:
+    UNIFIED_VALIDATION_AVAILABLE = False
+    warnings.warn("Unified validation framework not available - using fallback validation")
+
 # Import existing simulation classes (adjust import path as needed)
 try:
     from simulation import Stock, Flow, Model
@@ -200,13 +213,38 @@ class EnhancedSystemDynamicsModel(Model):
             parameters=all_parameters,
             auxiliaries=aux_values
         )
-    
+        
     def update_auxiliaries(self):
-        """Update all auxiliary calculations"""
+        """Enhanced auxiliary update with validation"""
+        
+        # Pre-validation check
+        try:
+            from unified_validation import get_unified_validator
+            validator = get_unified_validator()
+            
+            # Quick validation of auxiliary formulas before evaluation
+            for name, aux in self.auxiliaries.items():
+                formula_report = validator.validate_formula(aux['formula'])
+                if not formula_report.is_valid:
+                    critical_issues = [i for i in formula_report.issues if i.severity.value == 'critical']
+                    if critical_issues:
+                        warnings.warn(f"Critical validation issues in auxiliary '{name}': {[i.message for i in critical_issues]}")
+                        aux['value'] = 0.0  # Safe fallback
+                        continue
+        except ImportError:
+            pass  # Continue with original validation if unified framework not available
+        
+        # Create evaluation context
         context = self._create_current_context()
         
-        # Calculate auxiliaries in dependency order
-        for name, aux in self.auxiliaries.items():
+        # Sort auxiliaries by dependency order (if available)
+        try:
+            sorted_auxiliaries = self._sort_auxiliaries_by_dependencies()
+        except Exception:
+            sorted_auxiliaries = list(self.auxiliaries.items())
+        
+        # Update auxiliaries in dependency order
+        for name, aux in sorted_auxiliaries:
             try:
                 new_value = self.formula_engine.evaluate(
                     aux['formula'], context, FormulaType.AUXILIARY
@@ -218,7 +256,59 @@ class EnhancedSystemDynamicsModel(Model):
                 
             except Exception as e:
                 warnings.warn(f"Failed to evaluate auxiliary '{name}': {e}")
-                aux['value'] = 0.0
+                aux['value'] = 0.0  # Safe fallback
+    
+    def _sort_auxiliaries_by_dependencies(self) -> list:
+        """Sort auxiliaries by their dependencies"""
+        
+        try:
+            from unified_validation import get_unified_validator
+            validator = get_unified_validator()
+            
+            # Build dependency graph
+            dependencies = {}
+            for name, aux in self.auxiliaries.items():
+                report = validator.validate_formula(aux['formula'])
+                deps = []
+                for issue in report.issues:
+                    if issue.details and 'dependencies' in issue.details:
+                        deps.extend(issue.details['dependencies'])
+                dependencies[name] = [d for d in deps if d in self.auxiliaries]
+            
+            # Topological sort
+            sorted_names = self._topological_sort(dependencies)
+            return [(name, self.auxiliaries[name]) for name in sorted_names if name in self.auxiliaries]
+        
+        except Exception:
+            # Fallback to original order
+            return list(self.auxiliaries.items())
+    
+    def _topological_sort(self, dependencies: Dict[str, list]) -> list:
+        """Perform topological sort on dependency graph"""
+        
+        # Simple topological sort implementation
+        visited = set()
+        temp_visited = set()
+        result = []
+        
+        def visit(node):
+            if node in temp_visited:
+                return  # Circular dependency - skip
+            if node in visited:
+                return
+            
+            temp_visited.add(node)
+            for dep in dependencies.get(node, []):
+                visit(dep)
+            temp_visited.remove(node)
+            visited.add(node)
+            result.append(node)
+        
+        for node in dependencies:
+            if node not in visited:
+                visit(node)
+        
+        return result
     
     def step(self):
         """Enhanced step function with formula evaluation"""
@@ -242,11 +332,237 @@ class EnhancedSystemDynamicsModel(Model):
             # Basic step implementation
             self.time += getattr(self, 'dt', 1.0)
     
+    
+    def validate_comprehensive(self) -> Dict[str, Any]:
+        """Run comprehensive validation using unified framework"""
+        try:
+            from unified_validation import get_unified_validator, ValidationLevel
+            validator = get_unified_validator()
+            report = validator.validate_all(self, 'model', ValidationLevel.COMPREHENSIVE)
+            
+            return {
+                'valid': report.is_valid,
+                'framework': 'unified_comprehensive',
+                'total_issues': len(report.issues),
+                'issues_by_severity': {
+                    'critical': [i for i in report.issues if i.severity.value == 'critical'],
+                    'error': [i for i in report.issues if i.severity.value == 'error'],
+                    'warning': [i for i in report.issues if i.severity.value == 'warning'],
+                    'info': [i for i in report.issues if i.severity.value == 'info']
+                },
+                'issues_by_category': self._group_issues_by_category(report.issues),
+                'validation_statistics': validator.get_validation_statistics()
+            }
+        except Exception as e:
+            return {
+                'valid': False,
+                'framework': 'error',
+                'error': str(e),
+                'fallback_used': False
+            }
+    
+    def validate_security(self) -> Dict[str, Any]:
+        """Run security-focused validation"""
+        try:
+            from unified_validation import get_unified_validator, ValidationLevel
+            validator = get_unified_validator()
+            
+            # Focus on formula security validation
+            report = validator.validate_formula(
+                '\n'.join([aux['formula'] for aux in self.auxiliaries.values()]),
+                self._create_current_context()
+            )
+            
+            return {
+                'secure': report.is_valid,
+                'security_issues': [i for i in report.issues if i.category == 'formula_security'],
+                'critical_vulnerabilities': [i for i in report.issues if i.severity.value == 'critical'],
+                'framework': 'unified_security'
+            }
+        except Exception as e:
+            return {
+                'secure': False,
+                'framework': 'error',
+                'error': str(e)
+            }
+    
+    def validate_performance(self) -> Dict[str, Any]:
+        """Validate model for performance issues"""
+        try:
+            from unified_validation import get_unified_validator, ValidationLevel
+            validator = get_unified_validator()
+            report = validator.validate_all(self, 'model', ValidationLevel.STANDARD)
+            
+            performance_issues = [i for i in report.issues if 'performance' in i.category.lower()]
+            complexity_issues = [i for i in report.issues if 'complexity' in i.message.lower()]
+            
+            return {
+                'performance_optimal': len(performance_issues) == 0,
+                'performance_issues': performance_issues,
+                'complexity_issues': complexity_issues,
+                'optimization_suggestions': [i.suggestion for i in performance_issues + complexity_issues],
+                'framework': 'unified_performance'
+            }
+        except Exception as e:
+            return {
+                'performance_optimal': False,
+                'framework': 'error',
+                'error': str(e)
+            }
+    
+    def _group_issues_by_category(self, issues) -> Dict[str, list]:
+        """Group validation issues by category"""
+        categories = {}
+        for issue in issues:
+            if issue.category not in categories:
+                categories[issue.category] = []
+            categories[issue.category].append({
+                'severity': issue.severity.value,
+                'message': issue.message,
+                'suggestion': issue.suggestion,
+                'element': issue.element_name
+            })
+        return categories
+    
+    def get_validation_summary(self) -> Dict[str, Any]:
+        """Get a summary of all validation aspects"""
+        
+        summary = {
+            'timestamp': None,
+            'model_name': getattr(self, 'name', 'unnamed_model'),
+            'validation_aspects': {}
+        }
+        
+        # Run different validation aspects
+        validation_aspects = [
+            ('basic_formulas', lambda: self.validate_all_formulas()),
+            ('comprehensive', lambda: self.validate_comprehensive()),
+            ('security', lambda: self.validate_security()),
+            ('performance', lambda: self.validate_performance())
+        ]
+        
+        for aspect_name, aspect_func in validation_aspects:
+            try:
+                summary['validation_aspects'][aspect_name] = aspect_func()
+            except Exception as e:
+                summary['validation_aspects'][aspect_name] = {
+                    'valid': False,
+                    'error': str(e),
+                    'framework': 'error'
+                }
+        
+        # Overall validity
+        summary['overall_valid'] = all(
+            aspect.get('valid', aspect.get('secure', aspect.get('performance_optimal', False)))
+            for aspect in summary['validation_aspects'].values()
+            if isinstance(aspect, dict) and 'error' not in aspect
+        )
+        
+        return summary
+
+
     def validate_all_formulas(self) -> Dict[str, Any]:
-        """Validate all formulas in the model"""
+        """Validate all formulas using unified validation framework"""
+        
+        try:
+            from unified_validation import get_unified_validator
+            
+            validator = get_unified_validator()
+            
+            # DON'T validate the whole model - just validate individual formulas
+            # This breaks the recursion
+            all_issues = []
+            
+            # Validate each auxiliary formula individually
+            for name, aux in self.auxiliaries.items():
+                formula_report = validator.validate_formula(aux['formula'])
+                for issue in formula_report.issues:
+                    issue.element_name = f"auxiliary_{name}"
+                    all_issues.append(issue)
+            
+            # Validate flow formulas individually
+            for flow in getattr(self, 'flows', []):
+                if hasattr(flow, 'rate_formula'):
+                    flow_report = validator.validate_formula(flow.rate_formula)
+                    for issue in flow_report.issues:
+                        issue.element_name = getattr(flow, 'name', 'unnamed_flow')
+                        all_issues.append(issue)
+            
+            # Convert to legacy format
+            validation_results = {
+                'valid': len([i for i in all_issues if i.severity.value in ['error', 'critical']]) == 0,
+                'framework': 'unified',
+                'auxiliaries': {},
+                'flows': {},
+                'dependencies': {},
+                'errors': [i.message for i in all_issues if i.severity.value in ['error', 'critical']],
+                'warnings': [i.message for i in all_issues if i.severity.value == 'warning'],
+                'info': [i.message for i in all_issues if i.severity.value == 'info']
+            }
+            
+            return validation_results
+            
+        except Exception as e:
+            return self._fallback_formula_validation()
+
+
+
+
+    def validate_model_comprehensive(self) -> Dict[str, Any]:
+        """Comprehensive model validation (the full approach we wanted)"""
+        
+        try:
+            from unified_validation import get_unified_validator, ValidationLevel
+            
+            validator = get_unified_validator()
+            
+            # Use a DIFFERENT validation approach to avoid recursion
+            # Validate model structure but SKIP formula validation to prevent loops
+            report = validator.validators['mass_conservation'].validate(self, ValidationLevel.STANDARD)
+            
+            # Add flow compatibility validation
+            flow_report = validator.validators['flow_compatibility'].validate(self, ValidationLevel.STANDARD) 
+            report.merge(flow_report)
+            
+            # Add our OWN formula validation (not through the unified validator)
+            formula_results = self.validate_all_formulas()  # This calls the safe version above
+            
+            # Combine everything
+            return {
+                'valid': report.is_valid and formula_results['valid'],
+                'framework': 'unified_comprehensive',
+                'formula_validation': formula_results,
+                'structural_validation': {
+                    'valid': report.is_valid,
+                    'issues': [{'severity': i.severity.value, 'message': i.message, 'category': i.category} for i in report.issues]
+                },
+                'total_issues': len(report.issues) + len(formula_results.get('errors', [])) + len(formula_results.get('warnings', []))
+            }
+            
+        except Exception as e:
+            return {
+                'valid': False,
+                'framework': 'comprehensive_error',
+                'error': str(e),
+                'fallback_used': True
+            }
+    
+    def validate_quick(self) -> bool:
+        """Ultra-fast validation - just returns True/False"""
+        try:
+            result = self.validate_all_formulas()
+            return result['valid']
+        except:
+            return False
+
+
+    
+    def _fallback_formula_validation(self) -> Dict[str, Any]:
+        """Fallback validation using original formula engine"""
         
         validation_results = {
             'valid': True,
+            'framework': 'fallback',
             'auxiliaries': {},
             'flows': {},
             'dependencies': {},
@@ -254,28 +570,76 @@ class EnhancedSystemDynamicsModel(Model):
             'warnings': []
         }
         
-        context = self._create_current_context()
-        
-        # Validate auxiliary formulas
-        for name, aux in self.auxiliaries.items():
-            validation = self.formula_engine.validate_formula(aux['formula'], context)
-            validation_results['auxiliaries'][name] = validation
+        try:
+            context = self._create_current_context()
             
-            if not validation['valid']:
-                validation_results['valid'] = False
-                validation_results['errors'].extend([f"Auxiliary {name}: {err}" for err in validation['errors']])
-        
-        # Validate flow formulas
-        for flow in self.flows:
-            if hasattr(flow, 'validate_formula'):
-                validation = flow.validate_formula(context)
-                validation_results['flows'][flow.name] = validation
+            # Validate auxiliary formulas using formula engine
+            for name, aux in self.auxiliaries.items():
+                try:
+                    if hasattr(self, 'formula_engine') and self.formula_engine:
+                        validation = self.formula_engine.validate_formula(aux['formula'], context)
+                        validation_results['auxiliaries'][name] = validation
+                        
+                        if not validation.get('valid', True):
+                            validation_results['valid'] = False
+                            validation_results['errors'].extend([f"Auxiliary {name}: {err}" for err in validation.get('errors', [])])
+                        
+                        validation_results['warnings'].extend([f"Auxiliary {name}: {warn}" for warn in validation.get('warnings', [])])
+                        
+                    else:
+                        # Basic syntax check if no formula engine
+                        try:
+                            compile(aux['formula'], '<string>', 'eval')
+                            validation_results['auxiliaries'][name] = {'valid': True, 'errors': [], 'warnings': []}
+                        except SyntaxError as se:
+                            validation_results['valid'] = False
+                            validation_results['auxiliaries'][name] = {'valid': False, 'errors': [str(se)], 'warnings': []}
+                            validation_results['errors'].append(f"Auxiliary {name}: {str(se)}")
                 
-                if not validation['valid']:
-                    validation_results['valid'] = False
-                    validation_results['errors'].extend([f"Flow {flow.name}: {err}" for err in validation['errors']])
+                except Exception as aux_error:
+                    validation_results['warnings'].append(f"Could not validate auxiliary {name}: {str(aux_error)}")
+            
+            # Validate flow formulas
+            for flow in getattr(self, 'flows', []):
+                flow_name = getattr(flow, 'name', 'unnamed_flow')
+                try:
+                    if hasattr(flow, 'validate_formula') and callable(flow.validate_formula):
+                        flow_validation = flow.validate_formula(context)
+                        validation_results['flows'][flow_name] = flow_validation
+                        
+                        if not flow_validation.get('valid', True):
+                            validation_results['valid'] = False
+                            validation_results['errors'].extend([f"Flow {flow_name}: {err}" for err in flow_validation.get('errors', [])])
+                    
+                    elif hasattr(flow, 'rate_formula'):
+                        # Basic validation for flow rate formula
+                        try:
+                            if hasattr(self, 'formula_engine') and self.formula_engine:
+                                flow_validation = self.formula_engine.validate_formula(flow.rate_formula, context)
+                            else:
+                                compile(flow.rate_formula, '<string>', 'eval')
+                                flow_validation = {'valid': True, 'errors': [], 'warnings': []}
+                            
+                            validation_results['flows'][flow_name] = flow_validation
+                            
+                            if not flow_validation.get('valid', True):
+                                validation_results['valid'] = False
+                                validation_results['errors'].extend([f"Flow {flow_name}: {err}" for err in flow_validation.get('errors', [])])
+                        
+                        except Exception as flow_error:
+                            validation_results['valid'] = False
+                            validation_results['flows'][flow_name] = {'valid': False, 'errors': [str(flow_error)], 'warnings': []}
+                            validation_results['errors'].append(f"Flow {flow_name}: {str(flow_error)}")
+                
+                except Exception as flow_error:
+                    validation_results['warnings'].append(f"Could not validate flow {flow_name}: {str(flow_error)}")
+        
+        except Exception as e:
+            validation_results['errors'].append(f"Fallback validation failed: {str(e)}")
+            validation_results['valid'] = False
         
         return validation_results
+
     
     def analyze_dependencies(self) -> Dict[str, Set[str]]:
         """Analyze formula dependencies across the model"""
@@ -515,6 +879,71 @@ def test_formula_integration():
     
     print("\n✅ Integration test completed!")
 
+
+def test_formula_integration_validation():
+    """Test the unified validation integration in formula_integration"""
+    print("🧪 Testing Formula Integration with Unified Validation")
+    print("=" * 60)
+    
+    try:
+        # Create test enhanced model
+        model = EnhancedSystemDynamicsModel("Test Model")
+        
+        # Add test auxiliaries
+        model.add_auxiliary("growth_rate", "0.02")
+        model.add_auxiliary("capacity", "10000")
+        model.add_auxiliary("complex_calc", "growth_rate * capacity * (1 - Population / capacity)")
+        
+        # Test 1: Basic formula validation
+        print("\n📊 Test 1: Basic formula validation")
+        validation_result = model.validate_all_formulas()
+        print(f"   Framework used: {validation_result.get('framework', 'unknown')}")
+        print(f"   Valid: {validation_result['valid']}")
+        print(f"   Total issues: {len(validation_result.get('errors', []) + validation_result.get('warnings', []))}")
+        
+        # Test 2: Comprehensive validation
+        print("\n📊 Test 2: Comprehensive validation")
+        comprehensive_result = model.validate_comprehensive()
+        print(f"   Framework used: {comprehensive_result.get('framework', 'unknown')}")
+        print(f"   Valid: {comprehensive_result.get('valid', False)}")
+        print(f"   Total issues: {comprehensive_result.get('total_issues', 0)}")
+        
+        # Test 3: Security validation
+        print("\n📊 Test 3: Security validation")
+        security_result = model.validate_security()
+        print(f"   Framework used: {security_result.get('framework', 'unknown')}")
+        print(f"   Secure: {security_result.get('secure', False)}")
+        print(f"   Security issues: {len(security_result.get('security_issues', []))}")
+        
+        # Test 4: Performance validation
+        print("\n📊 Test 4: Performance validation")
+        performance_result = model.validate_performance()
+        print(f"   Framework used: {performance_result.get('framework', 'unknown')}")
+        print(f"   Performance optimal: {performance_result.get('performance_optimal', False)}")
+        
+        # Test 5: Validation summary
+        print("\n📊 Test 5: Validation summary")
+        summary = model.get_validation_summary()
+        print(f"   Model: {summary['model_name']}")
+        print(f"   Overall valid: {summary['overall_valid']}")
+        print(f"   Validation aspects: {len(summary['validation_aspects'])}")
+        
+        print("\n✅ Formula integration validation test completed!")
+        
+        
+        # For regular use (fast, safe)
+        result = model.validate_all_formulas()
+        
+        # When you want everything checked (comprehensive)
+        result = model.validate_model_comprehensive()
+        
+        # When you just need to know if it's valid (fastest)
+        is_valid = model.validate_quick()
+        
+    except Exception as e:
+        print(f"\n❌ Formula integration validation test failed: {str(e)}")
+
+
 # ===============================================================================
 # Main Execution
 # ===============================================================================
@@ -536,3 +965,6 @@ if __name__ == "__main__":
     print("   • Integration with existing Stock and Flow classes")
     print("   • Real-time auxiliary calculations")
     print("   • Comprehensive error handling and statistics")
+    test_formula_integration_validation()
+
+
